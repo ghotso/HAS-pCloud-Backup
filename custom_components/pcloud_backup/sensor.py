@@ -92,11 +92,14 @@ class PCloudBackupCoordinator(DataUpdateCoordinator):
             backup_agent = PCloudBackupAgent(self.hass, self.entry.entry_id)
             # Access API property to ensure it's loaded
             _ = backup_agent.api
+            _LOGGER.debug("Fetching backup list for sensors")
             backups = await backup_agent.async_list_backups()
+            _LOGGER.info("Sensor update: Found %d backups", len(backups))
 
             if backups:
                 # Get the most recent backup
                 latest_backup = backups[0]
+                _LOGGER.debug("Latest backup: %s", latest_backup.get("name"))
                 last_backup_str = latest_backup.get("modified", "")
                 try:
                     last_backup_dt = datetime.fromisoformat(
@@ -104,19 +107,24 @@ class PCloudBackupCoordinator(DataUpdateCoordinator):
                     )
                     if last_backup_dt.tzinfo is None:
                         last_backup_dt = last_backup_dt.replace(tzinfo=dt_util.DEFAULT_TIME_ZONE)
-                except (ValueError, TypeError):
+                    _LOGGER.debug("Latest backup date: %s", last_backup_dt.isoformat())
+                except (ValueError, TypeError) as err:
+                    _LOGGER.warning("Failed to parse backup date '%s': %s", last_backup_str, err)
                     last_backup_dt = None
             else:
+                _LOGGER.debug("No backups found")
                 last_backup_dt = None
 
             self._last_sync_status = "OK"
             self._last_sync_error = None
 
-            return {
+            result = {
                 ATTR_REMOTE_BACKUP_COUNT: len(backups),
                 ATTR_LAST_REMOTE_BACKUP: last_backup_dt.isoformat() if last_backup_dt else None,
                 ATTR_LAST_SYNC_STATUS: "OK",
             }
+            _LOGGER.debug("Sensor data: %s", result)
+            return result
 
         except PCloudAPIError as err:
             _LOGGER.error("Error updating pCloud backup data: %s", err)

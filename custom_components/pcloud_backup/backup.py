@@ -128,28 +128,33 @@ class PCloudBackupAgent(BackupAgent):
         try:
             config_entry = self.hass.config_entries.async_get_entry(self.config_entry_id)
             if config_entry is None:
-                _LOGGER.error("Config entry not found")
+                _LOGGER.error("Config entry not found for listing backups")
                 return []
 
             options = config_entry.options
             backup_folder = options.get(CONF_BACKUP_FOLDER, DEFAULT_BACKUP_FOLDER)
+            _LOGGER.debug("Listing backups from folder: %s", backup_folder)
 
             # Get or create folder
             folder_id = await self.api.async_get_folder_id(backup_folder)
+            _LOGGER.debug("Backup folder ID: %s", folder_id)
 
             # List files in folder
             files = await self.api.async_list_folder(folder_id)
+            _LOGGER.info("Found %d files in backup folder", len(files))
 
             # Parse backup info
             backups = [self.api.parse_backup_info(file_item) for file_item in files]
+            _LOGGER.debug("Parsed %d backups: %s", len(backups), [b.get("name") for b in backups])
 
             # Sort by modified date (newest first)
             backups.sort(key=lambda x: x.get("modified", ""), reverse=True)
 
+            _LOGGER.info("Returning %d backups from pCloud", len(backups))
             return backups
 
         except PCloudAPIError as err:
-            _LOGGER.error("Failed to list backups: %s", err)
+            _LOGGER.error("Failed to list backups: %s", err, exc_info=True)
             return []
         except Exception as err:
             _LOGGER.exception("Unexpected error listing backups")

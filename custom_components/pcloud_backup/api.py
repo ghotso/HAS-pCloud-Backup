@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any
 
 import aiohttp
+from homeassistant.util import dt as dt_util
 
 from .auth import PCloudAuth
 from .const import API_BASE_EU, API_BASE_US
@@ -271,7 +272,16 @@ class PCloudAPI:
         """Parse backup file information."""
         modified = file_item.get("modified", 0)
         # pCloud uses Unix timestamp
-        modified_dt = datetime.fromtimestamp(modified) if modified else datetime.now()
+        if modified:
+            try:
+                modified_dt = datetime.fromtimestamp(modified)
+                # Ensure timezone-aware
+                if modified_dt.tzinfo is None:
+                    modified_dt = modified_dt.replace(tzinfo=dt_util.UTC)
+            except (ValueError, OSError):
+                modified_dt = datetime.now(dt_util.UTC)
+        else:
+            modified_dt = datetime.now(dt_util.UTC)
 
         return {
             "fileid": file_item.get("fileid"),
