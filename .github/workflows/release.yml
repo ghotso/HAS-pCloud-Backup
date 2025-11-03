@@ -1,11 +1,12 @@
 name: Release
 
 on:
-  push:
-    branches:
-      - main
-      - master
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version number (e.g., 0.1.0, 1.2.3)'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -30,14 +31,134 @@ jobs:
         run: |
           pip install python-semantic-release[changelog]>=9.0.0
 
+      - name: Validate version format
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9-]+(\.[0-9]+)?)?$'; then
+            echo "❌ Invalid version format: $VERSION"
+            echo "Version must follow SemVer format: MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH-PRERELEASE"
+            exit 1
+          fi
+          echo "✅ Version format is valid: $VERSION"
+
       - name: Configure git
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Run semantic-release
+      - name: Update version and generate changelog
         env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
-          semantic-release publish
+          VERSION="${{ github.event.inputs.version }}"
+          
+          # Update manifest.json version
+          python3 << EOF
+          import json
+          
+          manifest_path = "custom_components/pcloud_backup/manifest.json"
+          with open(manifest_path, 'r') as f:
+              manifest = json.load(f)
+          
+          old_version = manifest.get('version', '0.0.0')
+          manifest['version'] = "$VERSION"
+          
+          with open(manifest_path, 'w') as f:
+              json.dump(manifest, f, indent=2)
+          
+          print(f"✅ Updated version from {old_version} to $VERSION")
+          EOF
+          
+          # Generate changelog from commits since last tag
+          echo "Generating changelog from commits since last release..."
+          semantic-release changelog --unreleased || echo "No new commits or changelog generation completed"
+          
+          # Show what will be released
+          echo "📋 Changes in this release:"
+          if [ -f "CHANGELOG.md" ]; then
+            head -n 50 CHANGELOG.md | grep -A 50 "## \[Unreleased\]" || head -n 50 CHANGELOG.md
+          fi
 
+      - name: Create tag and commit
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          
+          # Check if tag already exists
+          if git rev-parse "v$VERSION" >/dev/null 2>&1; then
+            echo "⚠️ Tag v$VERSION already exists!"
+            exit 1
+          fi
+          
+          # Add changes
+          git add custom_components/pcloud_backup/manifest.json
+          if [ -f "CHANGELOG.md" ]; then
+            git add CHANGELOG.md
+          fi
+          
+          # Commit changes (if any)
+          if ! git diff --staged --quiet; then
+            git commit -m "chore(release): v$VERSION [skip ci]"
+          fi
+          
+          # Create annotated tag
+          git tag -a "v$VERSION" -m "Release v$VERSION"
+          
+          # Push commit and tag
+          git push origin HEAD
+          git push origin "v$VERSION"
+
+      - name: Install GitHub CLI
+        run: |
+          type -p curl >/dev/null || apt install curl -y
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+          chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+          apt update
+          apt install gh -y
+
+      - name: Create GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          
+          # Extract changelog content for this version
+          CHANGELOG_CONTENT=$(python3 << 'PYEOF'
+          import re
+          import sys
+          
+          version = sys.argv[1]
+          try:
+              with open('CHANGELOG.md', 'r') as f:
+                  content = f.read()
+              
+              # Try to extract unreleased section or first section after [Unreleased]
+              # Look for ## [Unreleased] and get content until next ##
+              unreleased_match = re.search(r'##\s*\[Unreleased\](.*?)(?=##\s*\[|$)', content, re.DOTALL)
+              if unreleased_match:
+                  changelog_text = unreleased_match.group(1).strip()
+                  if changelog_text and changelog_text != "":
+                      print(changelog_text)
+                      sys.exit(0)
+              
+              # Fallback: try to find version section
+              version_pattern = rf'##\s*\[?{re.escape(version)}\](?:.*?\n)?(.*?)(?=##\s*\[|$)'
+              version_match = re.search(version_pattern, content, re.DOTALL | re.IGNORECASE)
+              if version_match:
+                  print(version_match.group(1).strip())
+                  sys.exit(0)
+              
+              # Last fallback: just print a simple release message
+              print(f"Release v{version}\n\nSee CHANGELOG.md for details.")
+          except Exception as e:
+              print(f"Release v{version}\n\nSee CHANGELOG.md for details.")
+          PYEOF
+          "$VERSION"
+          )
+          
+          # Create GitHub release
+          echo "$CHANGELOG_CONTENT" | gh release create "v$VERSION" \
+            --title "v$VERSION" \
+            --notes-file -
+          
+          echo "✅ Created GitHub release v$VERSION"

@@ -4,7 +4,6 @@ version_variable = [
 ]
 build_command = "echo 'No build step required'"
 dist_path = "."
-version_toml = false
 upload_to_vcs_release = true
 upload_to_pypi = false
 upload_to_release = false
@@ -35,11 +34,11 @@ prerelease = true
 
 [tool.semantic_release.branches.feature]
 match = "(feature/.*|feat/.*)"
-prerelease = "alpha"
+prerelease = true
 prerelease_token = "alpha"
 
 [tool.semantic_release.branches.bugfix]
 match = "(bugfix/.*|fix/.*)"
-prerelease = "beta"
+prerelease = true
 prerelease_token = "beta"
 
