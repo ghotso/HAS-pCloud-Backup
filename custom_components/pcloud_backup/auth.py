@@ -71,18 +71,15 @@ class PCloudDigestAuth(PCloudAuth):
         self._token_created: datetime | None = None
         self._authexpire = authexpire
         self._authinactiveexpire = authinactiveexpire
-        self._session: aiohttp.ClientSession | None = None
 
     async def _get_session(self) -> aiohttp.ClientSession:
-        """Get or create aiohttp session."""
-        if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
-        return self._session
+        """Get Home Assistant's aiohttp session."""
+        from homeassistant.helpers.aiohttp_client import async_get_clientsession
+        return async_get_clientsession(self.hass)
 
     async def close(self) -> None:
-        """Close the session."""
-        if self._session and not self._session.closed:
-            await self._session.close()
+        """Clean up resources (no-op for shared session)."""
+        pass
 
     async def _get_digest(self) -> str:
         """Get digest from pCloud API."""

@@ -33,18 +33,14 @@ class PCloudAPI:
         self.region = region.lower()
         self.auth = auth
         self._base_url = API_BASE_EU if region.lower() == "eu" else API_BASE_US
-        self._session: aiohttp.ClientSession | None = None
 
     async def _get_session(self) -> aiohttp.ClientSession:
-        """Get or create aiohttp session."""
-        if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
-        return self._session
+        """Get Home Assistant's aiohttp session."""
+        from homeassistant.helpers.aiohttp_client import async_get_clientsession
+        return async_get_clientsession(self.hass)
 
     async def async_close(self) -> None:
-        """Close the aiohttp session and auth."""
-        if self._session and not self._session.closed:
-            await self._session.close()
+        """Close resources."""
         await self.auth.close()
 
     async def _request(
