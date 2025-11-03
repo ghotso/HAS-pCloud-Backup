@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 import aiohttp
@@ -271,14 +272,26 @@ class PCloudAPI:
     def parse_backup_info(self, file_item: dict[str, Any]) -> dict[str, Any]:
         """Parse backup file information."""
         modified = file_item.get("modified", 0)
-        # pCloud uses Unix timestamp
+        # pCloud may return modified as:
+        # 1. Unix timestamp (number)
+        # 2. Unix timestamp (string number)
+        # 3. RFC 2822 date string (e.g. "Mon, 03 Nov 2025 16:39:17 +0000")
         if modified:
             try:
-                modified_dt = datetime.fromtimestamp(modified)
-                # Ensure timezone-aware
-                if modified_dt.tzinfo is None:
-                    modified_dt = modified_dt.replace(tzinfo=dt_util.UTC)
-            except (ValueError, OSError):
+                if isinstance(modified, str):
+                    # Try parsing as RFC 2822 date string first
+                    try:
+                        modified_dt = parsedate_to_datetime(modified)
+                        if modified_dt.tzinfo is None:
+                            modified_dt = modified_dt.replace(tzinfo=dt_util.UTC)
+                    except (ValueError, TypeError):
+                        # Try parsing as Unix timestamp string
+                        modified_dt = datetime.fromtimestamp(float(modified), tz=dt_util.UTC)
+                else:
+                    # Unix timestamp as number
+                    modified_dt = datetime.fromtimestamp(modified, tz=dt_util.UTC)
+            except (ValueError, OSError, TypeError) as err:
+                _LOGGER.warning("Failed to parse modified timestamp '%s': %s", modified, err)
                 modified_dt = datetime.now(dt_util.UTC)
         else:
             modified_dt = datetime.now(dt_util.UTC)

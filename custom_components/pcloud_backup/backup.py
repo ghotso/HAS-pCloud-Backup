@@ -87,7 +87,7 @@ class PCloudBackupAgent(BackupAgent):
             self._api = api
         return self._api
 
-    async def async_get_backup(self, backup_name: str) -> dict[str, Any] | None:
+    async def async_get_backup(self, backup_name: str) -> AgentBackup | None:
         """Get backup information by name."""
         try:
             config_entry = self.hass.config_entries.async_get_entry(self.config_entry_id)
@@ -112,7 +112,14 @@ class PCloudBackupAgent(BackupAgent):
             for file_item in files:
                 file_name = file_item.get("name", "")
                 if file_name == backup_name or file_name == backup_name_with_ext or file_name == backup_name_without_ext:
-                    return self.api.parse_backup_info(file_item)
+                    backup_dict = self.api.parse_backup_info(file_item)
+                    # Convert to AgentBackup object
+                    return AgentBackup(
+                        slug=self.slug,
+                        name=backup_dict.get("name", backup_name),
+                        date=backup_dict.get("modified", ""),
+                        size=backup_dict.get("size", 0),
+                    )
 
             return None
 
@@ -123,7 +130,7 @@ class PCloudBackupAgent(BackupAgent):
             _LOGGER.exception("Unexpected error getting backup")
             return None
 
-    async def async_list_backups(self) -> list[dict[str, Any]]:
+    async def async_list_backups(self) -> list[AgentBackup]:
         """List all backups in pCloud."""
         try:
             config_entry = self.hass.config_entries.async_get_entry(self.config_entry_id)
@@ -143,12 +150,31 @@ class PCloudBackupAgent(BackupAgent):
             files = await self.api.async_list_folder(folder_id)
             _LOGGER.info("Found %d files in backup folder", len(files))
 
-            # Parse backup info
-            backups = [self.api.parse_backup_info(file_item) for file_item in files]
-            _LOGGER.debug("Parsed %d backups: %s", len(backups), [b.get("name") for b in backups])
+            # Parse backup info and convert to AgentBackup objects
+            backup_dicts = [self.api.parse_backup_info(file_item) for file_item in files]
+            _LOGGER.debug("Parsed %d backups: %s", len(backup_dicts), [b.get("name") for b in backup_dicts])
 
             # Sort by modified date (newest first)
-            backups.sort(key=lambda x: x.get("modified", ""), reverse=True)
+            backup_dicts.sort(key=lambda x: x.get("modified", ""), reverse=True)
+
+            # Convert dicts to AgentBackup objects
+            backups = []
+            for backup_dict in backup_dicts:
+                backup_name = backup_dict.get("name", "")
+                if backup_name:
+                    # Create AgentBackup object
+                    # backup_id should be unique identifier, using name as it's unique per agent
+                    backup_id = f"{self.slug}:{backup_name}"
+                    backup = AgentBackup(
+                        slug=self.slug,
+                        name=backup_name,
+                        date=backup_dict.get("modified", ""),
+                        size=backup_dict.get("size", 0),
+                    )
+                    # Set backup_id attribute if it exists
+                    if hasattr(backup, 'backup_id'):
+                        backup.backup_id = backup_id
+                    backups.append(backup)
 
             _LOGGER.info("Returning %d backups from pCloud", len(backups))
             return backups

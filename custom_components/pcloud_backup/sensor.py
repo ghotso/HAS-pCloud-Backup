@@ -97,10 +97,10 @@ class PCloudBackupCoordinator(DataUpdateCoordinator):
             _LOGGER.info("Sensor update: Found %d backups", len(backups))
 
             if backups:
-                # Get the most recent backup
+                # Get the most recent backup (now AgentBackup object)
                 latest_backup = backups[0]
-                _LOGGER.debug("Latest backup: %s", latest_backup.get("name"))
-                last_backup_str = latest_backup.get("modified", "")
+                _LOGGER.debug("Latest backup: %s", latest_backup.name)
+                last_backup_str = latest_backup.date
                 try:
                     last_backup_dt = datetime.fromisoformat(
                         last_backup_str.replace("Z", "+00:00")
