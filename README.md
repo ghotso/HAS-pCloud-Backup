@@ -146,6 +146,16 @@ This integration follows Home Assistant's integration development guidelines:
 - Type hints throughout
 - Follows integration quality scale
 
+### Versioning
+
+This project uses [Semantic Versioning](https://semver.org/) with automatic versioning based on [Conventional Commits](https://www.conventionalcommits.org/).
+
+- **PATCH** (0.0.1): Bug fixes (`fix:`)
+- **MINOR** (0.1.0): New features (`feat:`)
+- **MAJOR** (1.0.0): Breaking changes (`feat!:` or `BREAKING CHANGE:`)
+
+Commits to `main` automatically trigger version bumps and changelog generation. See [CONTRIBUTING.md](CONTRIBUTING.md) for commit message guidelines.
+
 ## Contributing
 
 Contributions are welcome! Please:

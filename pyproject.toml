@@ -1,0 +1,46 @@
+[tool.semantic_release]
+version_variable = [
+    "custom_components/pcloud_backup/manifest.json:version",
+]
+build_command = "echo 'No build step required'"
+dist_path = "."
+version_toml = false
+upload_to_vcs_release = true
+upload_to_pypi = false
+upload_to_release = false
+hvcs = "github"
+commit_author = "github-actions <github-actions[bot]@users.noreply.github.com>"
+commit_message = "chore(release): {version} [skip ci]"
+
+[tool.semantic_release.changelog]
+template_dir = "templates"
+template_file = "CHANGELOG.tpl.md"
+unreleased = true
+
+[tool.semantic_release.changelog.environment]
+block_start_string = "{%"
+block_end_string = "%}"
+variable_start_string = "{{"
+variable_end_string = "}}"
+comment_start_string = "{#"
+comment_end_string = "#}"
+
+[tool.semantic_release.branches.main]
+match = "(main|master)"
+prerelease_token = null
+
+[tool.semantic_release.branches.pre]
+match = ".*pre.*"
+prerelease_token = "rc"
+prerelease = true
+
+[tool.semantic_release.branches.feature]
+match = "(feature/.*|feat/.*)"
+prerelease = "alpha"
+prerelease_token = "alpha"
+
+[tool.semantic_release.branches.bugfix]
+match = "(bugfix/.*|fix/.*)"
+prerelease = "beta"
+prerelease_token = "beta"
+

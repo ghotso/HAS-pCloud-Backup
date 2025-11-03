@@ -1,0 +1,26 @@
+name: Version Check
+
+on:
+  pull_request:
+    branches:
+      - main
+      - master
+
+jobs:
+  version-check:
+    name: Check Version Consistency
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check manifest version format
+        run: |
+          VERSION=$(grep -o '"version": "[^"]*"' custom_components/pcloud_backup/manifest.json | cut -d'"' -f4)
+          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9-]+(\.[0-9]+)?)?$'; then
+            echo "❌ Invalid version format in manifest.json: $VERSION"
+            echo "Version must follow SemVer format: MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH-PRERELEASE"
+            exit 1
+          fi
+          echo "✅ Version format is valid: $VERSION"
+

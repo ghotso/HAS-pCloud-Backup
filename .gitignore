@@ -56,3 +56,9 @@ Thumbs.db
 # Home Assistant
 .homeassistant/
 
+# Semantic Release
+.releaserc.json
+dist/
+build/
+*.egg-info/
+
