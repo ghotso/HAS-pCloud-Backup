@@ -233,13 +233,10 @@ class PCloudAPI:
         metadata = result.get("metadata", {})
         contents = metadata.get("contents", [])
 
-        # Filter only files (not folders) that look like backups
-        backup_files = [
-            item
-            for item in contents
-            if not item.get("isfolder")
-            and (item.get("name", "").endswith(".tar") or "backup" in item.get("name", "").lower())
-        ]
+        # Filter only files (not folders) - accept all files in backup folder
+        # Home Assistant backups have .tar extension, but we accept all files
+        # to be flexible with naming
+        backup_files = [item for item in contents if not item.get("isfolder")]
         return backup_files
 
     async def async_get_file_link(self, file_id: int) -> str:

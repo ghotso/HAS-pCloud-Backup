@@ -90,6 +90,8 @@ class PCloudBackupCoordinator(DataUpdateCoordinator):
             from .backup import PCloudBackupAgent
 
             backup_agent = PCloudBackupAgent(self.hass, self.entry.entry_id)
+            # Access API property to ensure it's loaded
+            _ = backup_agent.api
             backups = await backup_agent.async_list_backups()
 
             if backups:

@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator, Callable, Coroutine
 from datetime import datetime, timedelta
 from typing import Any
 
-from homeassistant.components.backup import BackupAgent
+from homeassistant.components.backup import AgentBackup, BackupAgent
 from homeassistant.core import HomeAssistant
 
 from .api import PCloudAPI, PCloudAPIError
@@ -103,9 +104,14 @@ class PCloudBackupAgent(BackupAgent):
             # List files to find the backup
             files = await self.api.async_list_folder(folder_id)
 
-            # Find the backup file
+            # Normalize backup name - check both with and without .tar
+            backup_name_with_ext = backup_name if backup_name.endswith(".tar") else f"{backup_name}.tar"
+            backup_name_without_ext = backup_name.rstrip(".tar")
+
+            # Find the backup file (check both variants)
             for file_item in files:
-                if file_item.get("name") == backup_name:
+                file_name = file_item.get("name", "")
+                if file_name == backup_name or file_name == backup_name_with_ext or file_name == backup_name_without_ext:
                     return self.api.parse_backup_info(file_item)
 
             return None
@@ -149,8 +155,19 @@ class PCloudBackupAgent(BackupAgent):
             _LOGGER.exception("Unexpected error listing backups")
             return []
 
-    async def async_upload_backup(self, backup_path: str, backup_name: str) -> None:
-        """Upload a backup to pCloud."""
+    async def async_upload_backup(
+        self,
+        *,
+        open_stream: Callable[[], Coroutine[Any, Any, AsyncIterator[bytes]]],
+        backup: AgentBackup,
+        **kwargs: Any,
+    ) -> None:
+        """Upload a backup to pCloud.
+        
+        Args:
+            open_stream: A function returning an async iterator that yields bytes.
+            backup: Metadata about the backup that should be uploaded.
+        """
         try:
             config_entry = self.hass.config_entries.async_get_entry(self.config_entry_id)
             if config_entry is None:
@@ -162,21 +179,25 @@ class PCloudBackupAgent(BackupAgent):
             # Get or create folder
             folder_id = await self.api.async_get_folder_id(backup_folder)
 
-            # Read backup file
-            with open(backup_path, "rb") as backup_file:
-                backup_data = backup_file.read()
+            # Get backup name from backup object and ensure .tar extension
+            backup_name = backup.name
+            if not backup_name.endswith(".tar"):
+                backup_name = f"{backup_name}.tar"
+
+            # Read backup data from stream
+            _LOGGER.info("Uploading backup %s to pCloud", backup_name)
+            backup_data = b""
+            stream = await open_stream()
+            async for chunk in stream:
+                backup_data += chunk
 
             # Upload to pCloud
-            _LOGGER.info("Uploading backup %s to pCloud", backup_name)
             await self.api.async_upload_file(folder_id, backup_name, backup_data)
             _LOGGER.info("Successfully uploaded backup %s", backup_name)
 
             # Apply retention policy
             await self._apply_retention_policy(folder_id, options)
 
-        except FileNotFoundError:
-            _LOGGER.error("Backup file not found: %s", backup_path)
-            raise
         except PCloudAPIError as err:
             _LOGGER.error("Failed to upload backup: %s", err)
             raise
@@ -202,10 +223,15 @@ class PCloudBackupAgent(BackupAgent):
             # List files to find the backup
             files = await self.api.async_list_folder(folder_id)
 
-            # Find the backup file
+            # Normalize backup name - check both with and without .tar
+            backup_name_with_ext = backup_name if backup_name.endswith(".tar") else f"{backup_name}.tar"
+            backup_name_without_ext = backup_name.rstrip(".tar")
+
+            # Find the backup file (check both variants)
             backup_file = None
             for file_item in files:
-                if file_item.get("name") == backup_name:
+                file_name = file_item.get("name", "")
+                if file_name == backup_name or file_name == backup_name_with_ext or file_name == backup_name_without_ext:
                     backup_file = file_item
                     break
 
@@ -251,10 +277,15 @@ class PCloudBackupAgent(BackupAgent):
             # List files to find the backup
             files = await self.api.async_list_folder(folder_id)
 
-            # Find the backup file
+            # Normalize backup name - check both with and without .tar
+            backup_name_with_ext = backup_name if backup_name.endswith(".tar") else f"{backup_name}.tar"
+            backup_name_without_ext = backup_name.rstrip(".tar")
+
+            # Find the backup file (check both variants)
             backup_file = None
             for file_item in files:
-                if file_item.get("name") == backup_name:
+                file_name = file_item.get("name", "")
+                if file_name == backup_name or file_name == backup_name_with_ext or file_name == backup_name_without_ext:
                     backup_file = file_item
                     break
 
