@@ -27,7 +27,6 @@ comment_end_string = "#}"
 
 [tool.semantic_release.branches.main]
 match = "(main|master)"
-prerelease_token = null
 
 [tool.semantic_release.branches.pre]
 match = ".*pre.*"
