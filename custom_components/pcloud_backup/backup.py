@@ -40,33 +40,39 @@ class PCloudBackupAgent(BackupAgent):
         self.domain = DOMAIN
         self.unique_id = config_entry_id
         self.name = "pCloud"
-        # Set slug for backward compatibility
-        self.slug = DOMAIN
+        # Slug must be in format "{domain}.{unique_id}" for Home Assistant backup system
+        self.slug = f"{DOMAIN}.{config_entry_id}"
 
     @property
     def available(self) -> bool:
         """Return if the backup agent is available.
         
         This property must return True for the agent to be usable.
+        Must be synchronous - no async calls allowed.
+        
+        The agent is considered available if the integration domain exists
+        in hass.data, meaning the integration has been loaded. The API
+        will be lazy-loaded when needed via the api property.
         """
         try:
-            # Check if config entry exists
-            config_entry = self.hass.config_entries.async_get_entry(self.config_entry_id)
-            if config_entry is None:
-                _LOGGER.warning("Config entry %s not found for backup agent availability check", self.config_entry_id)
+            # Fast path: If API is cached, we're definitely available
+            if self._api is not None:
+                return True
+            
+            # Check if domain exists in hass.data (integration is loaded)
+            # If domain exists, the integration is set up and agent should be available
+            domain_data = self.hass.data.get(DOMAIN)
+            if domain_data is None:
+                # Domain not loaded yet
+                _LOGGER.debug("Backup agent %s not available - domain not loaded", self.config_entry_id)
                 return False
             
-            # Check if API is accessible
-            api = self.hass.data.get(DOMAIN, {}).get(self.config_entry_id)
-            if api is None:
-                _LOGGER.warning("API not found for backup agent %s in hass.data", self.config_entry_id)
-                return False
-            
-            # Agent is available if API exists
-            _LOGGER.debug("Backup agent %s is available", self.config_entry_id)
+            # Domain exists - integration is loaded, so agent is available
+            # API will be loaded lazily when needed
             return True
         except Exception as err:
-            _LOGGER.warning("Error checking backup agent availability: %s", err, exc_info=True)
+            _LOGGER.error("Error checking backup agent availability: %s", err, exc_info=True)
+            # On error, return False to be safe
             return False
 
     @property

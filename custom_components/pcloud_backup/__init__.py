@@ -57,8 +57,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Store API instance
     hass.data[DOMAIN][entry.entry_id] = api
 
-    # Create backup agent
+    # Create backup agent with API reference
     backup_agent = PCloudBackupAgent(hass, entry.entry_id)
+    backup_agent._api = api  # Set API directly so available property works
     hass.data[DOMAIN][f"{entry.entry_id}_backup_agent"] = backup_agent
     
     # Register backup agent after startup is complete
@@ -78,19 +79,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 # Check if backup_agents is a collection we can add to
                 if hasattr(backup_manager, "backup_agents"):
                     backup_agents = backup_manager.backup_agents
+                    
+                    # Log agent info before registration
+                    _LOGGER.info("Registering pCloud backup agent: unique_id=%s, slug=%s, domain=%s, available=%s",
+                               backup_agent.unique_id, backup_agent.slug, backup_agent.domain, backup_agent.available)
+                    
                     # Try to add the agent to the collection
                     if hasattr(backup_agents, "add"):
                         backup_agents.add(backup_agent)
-                        _LOGGER.info("Registered pCloud backup agent via backup_agents.add()")
+                        _LOGGER.info("Registered pCloud backup agent via backup_agents.add() - available=%s", backup_agent.available)
                         return
                     elif hasattr(backup_agents, "append"):
                         backup_agents.append(backup_agent)
-                        _LOGGER.info("Registered pCloud backup agent via backup_agents.append()")
+                        _LOGGER.info("Registered pCloud backup agent via backup_agents.append() - available=%s", backup_agent.available)
                         return
                     elif isinstance(backup_agents, dict):
                         # If it's a dict, use slug as key
                         backup_agents[backup_agent.slug] = backup_agent
-                        _LOGGER.info("Registered pCloud backup agent via backup_agents dict")
+                        _LOGGER.info("Registered pCloud backup agent via backup_agents dict - available=%s", backup_agent.available)
                         return
                 
                 # Try standard registration methods
