@@ -27,12 +27,6 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
-@callback
-def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
-    """Get the options flow for this handler."""
-    return PCloudOptionsFlowHandler(config_entry)
-
-
 class PCloudConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for pCloud Backup."""
 
@@ -66,7 +60,7 @@ class PCloudConfigFlow(ConfigFlow, domain=DOMAIN):
                 await self.async_set_unique_id(username)
                 self._abort_if_unique_id_configured()
 
-                # Create entry
+                # Create entry (password stored in data - HA encrypts it automatically)
                 return self.async_create_entry(
                     title=f"pCloud Backup ({region.upper()})",
                     data={
@@ -102,7 +96,7 @@ class PCloudConfigFlow(ConfigFlow, domain=DOMAIN):
                         }
                     ),
                     vol.Required(CONF_USERNAME): str,
-                    vol.Required(CONF_PASSWORD): str,
+                    vol.Required(CONF_PASSWORD): str,  # Note: Home Assistant will render as password field
                 }
             ),
             errors=errors,
@@ -237,3 +231,15 @@ class PCloudOptionsFlowHandler(OptionsFlow):
                 }
             ),
         )
+
+
+# Define options flow callback
+@callback
+def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
+    """Get the options flow for this handler."""
+    return PCloudOptionsFlowHandler(config_entry)
+
+
+# Register options flow handler on the ConfigFlow class
+PCloudConfigFlow.OPTIONS_FLOW = async_get_options_flow
+
