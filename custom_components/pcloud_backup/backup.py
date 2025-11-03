@@ -48,6 +48,37 @@ class PCloudBackupAgent(BackupAgent):
             self._api = api
         return self._api
 
+    async def async_get_backup(self, backup_name: str) -> dict[str, Any] | None:
+        """Get backup information by name."""
+        try:
+            config_entry = self.hass.config_entries.async_get_entry(self.config_entry_id)
+            if config_entry is None:
+                _LOGGER.error("Config entry not found")
+                return None
+
+            options = config_entry.options
+            backup_folder = options.get(CONF_BACKUP_FOLDER, DEFAULT_BACKUP_FOLDER)
+
+            # Get folder ID
+            folder_id = await self.api.async_get_folder_id(backup_folder)
+
+            # List files to find the backup
+            files = await self.api.async_list_folder(folder_id)
+
+            # Find the backup file
+            for file_item in files:
+                if file_item.get("name") == backup_name:
+                    return self.api.parse_backup_info(file_item)
+
+            return None
+
+        except PCloudAPIError as err:
+            _LOGGER.error("Failed to get backup: %s", err)
+            return None
+        except Exception as err:
+            _LOGGER.exception("Unexpected error getting backup")
+            return None
+
     async def async_list_backups(self) -> list[dict[str, Any]]:
         """List all backups in pCloud."""
         try:
