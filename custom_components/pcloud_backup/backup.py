@@ -33,7 +33,7 @@ class PCloudBackupAgent(BackupAgent):
         config_entry_id: str,
     ) -> None:
         """Initialize the backup agent."""
-        super().__init__(hass, DOMAIN)
+        self.hass = hass
         self.config_entry_id = config_entry_id
         self._api: PCloudAPI | None = None
 

@@ -51,9 +51,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Store API instance
     hass.data[DOMAIN][entry.entry_id] = api
 
-    # Register backup agent (BackupAgent registers itself on instantiation)
+    # Register backup agent
+    # Note: BackupAgent instances are automatically registered when instantiated
     backup_agent = PCloudBackupAgent(hass, entry.entry_id)
-    # Store backup agent reference (optional, for cleanup if needed)
+    # Store backup agent reference for cleanup if needed
     hass.data[DOMAIN][f"{entry.entry_id}_backup_agent"] = backup_agent
 
     # Register update listener
