@@ -107,11 +107,6 @@ jobs:
           git push origin HEAD
           git push origin "v$VERSION"
 
-      - name: Setup GitHub CLI
-        uses: cli/cli-action@v2
-        with:
-          github-token: ${{ secrets.GH_TOKEN }}
-
       - name: Create GitHub Release
         env:
           GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
@@ -152,7 +147,7 @@ jobs:
           "$VERSION"
           )
           
-          # Create GitHub release
+          # Create GitHub release using GitHub CLI
           echo "$CHANGELOG_CONTENT" | gh release create "v$VERSION" \
             --title "v$VERSION" \
             --notes-file -
