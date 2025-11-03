@@ -8,13 +8,14 @@ A native Home Assistant Backup Agent integration for pCloud, enabling users to s
 
 ## Features
 
-- ✅ **OAuth2 Authentication** - Secure login using Home Assistant's built-in OAuth2 helpers
+- ✅ **Digest Authentication** - Secure authentication using pCloud's digest authentication method
 - ✅ **Region Support** - Choose between EU or US pCloud datacenters
-- ✅ **Automatic Uploads** - Integrates with Home Assistant's backup system
-- ✅ **Backup Management** - List, download, and delete backups from pCloud
+- ✅ **Automatic Uploads** - Integrates seamlessly with Home Assistant's backup system
+- ✅ **Backup Management** - List, download, and delete backups from pCloud directly in Home Assistant
 - ✅ **Retention Policies** - Automatic cleanup based on count or age
 - ✅ **Monitoring Sensors** - Track backup count, last backup time, and sync status
 - ✅ **Encrypted Backups** - Uses Home Assistant's built-in backup encryption
+- ✅ **Native Backup Agent** - Fully integrated with Home Assistant's backup UI
 
 ## Installation
 
@@ -96,35 +97,22 @@ All backups (both local and pCloud) are displayed in **Settings** → **System**
 
 - Home Assistant 2025.1 or later
 - pCloud account with email and password
+- Active internet connection for backup synchronization
 
 ## Authentication
 
-**Current Method: Digest Authentication**
-
-This integration currently uses **digest authentication** (username/password) because pCloud's OAuth2 developer portal has been unavailable. The integration uses secure digest authentication as documented in the [pCloud API documentation](https://docs.pcloud.com/methods/intro/authentication.html).
-
-### Why Digest Instead of OAuth2?
-
-The pCloud developer portal (`docs.pcloud.com`) has been unavailable since at least January 2025, preventing the registration of new OAuth2 applications. The integration is designed to easily switch back to OAuth2 once pCloud restores their developer portal.
+This integration uses **digest authentication** as documented in the [pCloud API documentation](https://docs.pcloud.com/methods/intro/authentication.html).
 
 ### Security
 
-Digest authentication uses SHA1 hashing to avoid sending plain-text passwords over the network. However, for maximum security:
+Digest authentication provides secure authentication without sending plain-text passwords:
 
-- All API communication uses HTTPS (SSL/TLS)
-- Credentials are stored securely in Home Assistant's credential store
-- The integration follows pCloud's recommended authentication flow
+- **SHA1 Hashing**: Passwords are hashed using SHA1 before transmission
+- **HTTPS Encryption**: All API communication uses HTTPS (SSL/TLS)
+- **Secure Storage**: Credentials are stored securely in Home Assistant's credential store
+- **Token Management**: Authentication tokens are automatically refreshed when needed
 
-### Switching to OAuth2 (Future)
-
-When pCloud's developer portal is restored, you can easily switch back to OAuth2:
-
-1. Set `USE_OAUTH2 = True` in `custom_components/pcloud_backup/auth.py`
-2. Uncomment the OAuth2 config flow handler in `config_flow.py`
-3. Register an OAuth2 app at [pCloud Developer Portal](https://docs.pcloud.com/my-apps/)
-4. Configure OAuth2 credentials in the integration
-
-The code structure is already in place to support this transition seamlessly.
+The integration follows pCloud's recommended authentication flow and ensures your credentials remain secure.
 
 ## Troubleshooting
 
@@ -159,13 +147,13 @@ This integration follows Home Assistant's integration development guidelines:
 
 ### Versioning
 
-This project uses [Semantic Versioning](https://semver.org/) with automatic versioning based on [Conventional Commits](https://www.conventionalcommits.org/).
+This project uses [Semantic Versioning](https://semver.org/) with manual release workflow:
 
 - **PATCH** (0.0.1): Bug fixes (`fix:`)
 - **MINOR** (0.1.0): New features (`feat:`)
 - **MAJOR** (1.0.0): Breaking changes (`feat!:` or `BREAKING CHANGE:`)
 
-Commits to `main` automatically trigger version bumps and changelog generation. See [CONTRIBUTING.md](CONTRIBUTING.md) for commit message guidelines.
+Releases are created manually via GitHub Actions workflow dispatch with automatic changelog generation since the last version. See [CONTRIBUTING.md](CONTRIBUTING.md) for commit message guidelines.
 
 ## Contributing
 
