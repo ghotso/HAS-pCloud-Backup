@@ -110,15 +110,14 @@ jobs:
       - name: Create GitHub Release
         env:
           GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+          VERSION: ${{ github.event.inputs.version }}
         run: |
-          VERSION="${{ github.event.inputs.version }}"
-          
           # Extract changelog content for this version
-          CHANGELOG_CONTENT=$(python3 << 'PYEOF'
+          CHANGELOG_CONTENT=$(python3 << PYEOF
           import re
-          import sys
+          import os
           
-          version = sys.argv[1]
+          version = os.environ.get('VERSION', '0.0.0')
           try:
               with open('CHANGELOG.md', 'r') as f:
                   content = f.read()
@@ -130,26 +129,25 @@ jobs:
                   changelog_text = unreleased_match.group(1).strip()
                   if changelog_text and changelog_text != "":
                       print(changelog_text)
-                      sys.exit(0)
+                      exit(0)
               
               # Fallback: try to find version section
               version_pattern = rf'##\s*\[?{re.escape(version)}\](?:.*?\n)?(.*?)(?=##\s*\[|$)'
               version_match = re.search(version_pattern, content, re.DOTALL | re.IGNORECASE)
               if version_match:
                   print(version_match.group(1).strip())
-                  sys.exit(0)
+                  exit(0)
               
               # Last fallback: just print a simple release message
               print(f"Release v{version}\n\nSee CHANGELOG.md for details.")
           except Exception as e:
               print(f"Release v{version}\n\nSee CHANGELOG.md for details.")
           PYEOF
-          "$VERSION"
           )
           
           # Create GitHub release using GitHub CLI
-          echo "$CHANGELOG_CONTENT" | gh release create "v$VERSION" \
-            --title "v$VERSION" \
+          echo "$CHANGELOG_CONTENT" | gh release create "v${{ github.event.inputs.version }}" \
+            --title "v${{ github.event.inputs.version }}" \
             --notes-file -
           
-          echo "✅ Created GitHub release v$VERSION"
+          echo "✅ Created GitHub release v${{ github.event.inputs.version }}"
