@@ -113,12 +113,20 @@ class PCloudBackupAgent(BackupAgent):
                 file_name = file_item.get("name", "")
                 if file_name == backup_name or file_name == backup_name_with_ext or file_name == backup_name_without_ext:
                     backup_dict = self.api.parse_backup_info(file_item)
-                    # Convert to AgentBackup object
+                    # Convert to AgentBackup object with all required parameters
+                    backup_id = f"{self.slug}:{backup_dict.get('name', backup_name)}"
                     return AgentBackup(
-                        slug=self.slug,
                         name=backup_dict.get("name", backup_name),
                         date=backup_dict.get("modified", ""),
                         size=backup_dict.get("size", 0),
+                        backup_id=backup_id,
+                        addons=[],  # We don't have addon info from pCloud
+                        database_included=True,  # Assume included
+                        extra_metadata={},  # No extra metadata available
+                        folders=[],  # We don't have folder info from pCloud
+                        homeassistant_included=True,  # Assume included
+                        homeassistant_version="",  # Not available from pCloud
+                        protected=False,  # Default to not protected
                     )
 
             return None
@@ -162,18 +170,21 @@ class PCloudBackupAgent(BackupAgent):
             for backup_dict in backup_dicts:
                 backup_name = backup_dict.get("name", "")
                 if backup_name:
-                    # Create AgentBackup object
-                    # backup_id should be unique identifier, using name as it's unique per agent
+                    # Create AgentBackup object with all required parameters
                     backup_id = f"{self.slug}:{backup_name}"
                     backup = AgentBackup(
-                        slug=self.slug,
                         name=backup_name,
                         date=backup_dict.get("modified", ""),
                         size=backup_dict.get("size", 0),
+                        backup_id=backup_id,
+                        addons=[],  # We don't have addon info from pCloud
+                        database_included=True,  # Assume included (default for backups)
+                        extra_metadata={},  # No extra metadata available
+                        folders=[],  # We don't have folder info from pCloud
+                        homeassistant_included=True,  # Assume included
+                        homeassistant_version="",  # Not available from pCloud
+                        protected=False,  # Default to not protected
                     )
-                    # Set backup_id attribute if it exists
-                    if hasattr(backup, 'backup_id'):
-                        backup.backup_id = backup_id
                     backups.append(backup)
 
             _LOGGER.info("Returning %d backups from pCloud", len(backups))
