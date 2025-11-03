@@ -36,9 +36,27 @@ class PCloudBackupAgent(BackupAgent):
         self.hass = hass
         self.config_entry_id = config_entry_id
         self._api: PCloudAPI | None = None
-        # Set slug and name for backup agent identification
-        self.slug = DOMAIN
+        # Required attributes for BackupAgent
+        self.domain = DOMAIN
+        self.unique_id = config_entry_id
         self.name = "pCloud"
+        # Set slug for backward compatibility
+        self.slug = DOMAIN
+
+    @property
+    def available(self) -> bool:
+        """Return if the backup agent is available."""
+        try:
+            # Check if config entry exists and is loaded
+            config_entry = self.hass.config_entries.async_get_entry(self.config_entry_id)
+            if config_entry is None:
+                return False
+            
+            # Check if API is accessible
+            api = self.hass.data.get(DOMAIN, {}).get(self.config_entry_id)
+            return api is not None
+        except Exception:
+            return False
 
     @property
     def api(self) -> PCloudAPI:
