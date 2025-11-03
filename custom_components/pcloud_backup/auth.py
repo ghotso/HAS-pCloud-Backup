@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+from hashlib import pbkdf2_hmac
 import logging
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
@@ -93,17 +94,23 @@ class PCloudDigestAuth(PCloudAuth):
             return result.get("digest", "")
 
     def _calculate_password_digest(self, digest: str) -> str:
-        """Calculate password digest.
-
-        Formula: sha1(password + sha1(lowercase(username)) + digest)
+        """Calculate password digest using PBKDF2 with SHA-256.
+        
+        Preferred formula: PBKDF2_HMAC('sha256', password, salt=(sha1(username)+digest)), 100_000 iterations.
+        If the pCloud API mandates SHA-1 as in the original protocol, document the security risk.
         """
-        # SHA1 of lowercase username
+        # SHA1 of lowercase username (consistent with legacy protocol)
         username_hash = hashlib.sha1(self.username.encode("utf-8")).hexdigest()
 
-        # SHA1 of password + username_hash + digest
-        password_digest = hashlib.sha1(
-            (self.password + username_hash + digest).encode("utf-8")
-        ).hexdigest()
+        # Combine username_hash and digest as salt
+        salt = (username_hash + digest).encode("utf-8")
+        # Use PBKDF2 with SHA-256 and a high iteration count
+        password_digest = hashlib.pbkdf2_hmac(
+            'sha256',
+            self.password.encode("utf-8"),
+            salt,
+            100_000
+        ).hex()
 
         return password_digest
 
