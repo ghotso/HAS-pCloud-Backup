@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import logging
 
-from homeassistant.components.backup import async_register_backup_agent
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
@@ -52,9 +51,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Store API instance
     hass.data[DOMAIN][entry.entry_id] = api
 
-    # Register backup agent
+    # Register backup agent (BackupAgent registers itself on instantiation)
     backup_agent = PCloudBackupAgent(hass, entry.entry_id)
-    async_register_backup_agent(hass, backup_agent)
+    # Store backup agent reference (optional, for cleanup if needed)
+    hass.data[DOMAIN][f"{entry.entry_id}_backup_agent"] = backup_agent
 
     # Register update listener
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
