@@ -45,17 +45,28 @@ class PCloudBackupAgent(BackupAgent):
 
     @property
     def available(self) -> bool:
-        """Return if the backup agent is available."""
+        """Return if the backup agent is available.
+        
+        This property must return True for the agent to be usable.
+        """
         try:
-            # Check if config entry exists and is loaded
+            # Check if config entry exists
             config_entry = self.hass.config_entries.async_get_entry(self.config_entry_id)
             if config_entry is None:
+                _LOGGER.warning("Config entry %s not found for backup agent availability check", self.config_entry_id)
                 return False
             
             # Check if API is accessible
             api = self.hass.data.get(DOMAIN, {}).get(self.config_entry_id)
-            return api is not None
-        except Exception:
+            if api is None:
+                _LOGGER.warning("API not found for backup agent %s in hass.data", self.config_entry_id)
+                return False
+            
+            # Agent is available if API exists
+            _LOGGER.debug("Backup agent %s is available", self.config_entry_id)
+            return True
+        except Exception as err:
+            _LOGGER.warning("Error checking backup agent availability: %s", err, exc_info=True)
             return False
 
     @property
