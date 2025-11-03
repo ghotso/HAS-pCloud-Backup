@@ -16,5 +16,5 @@
     "aiohttp>=3.8.0"
   ],
   "icon": "custom_components/pcloud_backup/logo.png",
-  "version": "0.0.13"
+  "version": "0.0.14"
 }
