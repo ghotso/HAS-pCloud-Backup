@@ -69,17 +69,28 @@ The integration provides the following sensors:
 
 ## Usage
 
-Once configured, the integration automatically:
+### Creating Backups
 
+1. Go to **Settings** → **System** → **Backups**
+2. Click the **three dots menu** (⋮) in the top right corner
+3. Select **Create Backup**
+4. The backup will be created locally and automatically uploaded to pCloud
+
+The integration automatically:
 - Uploads backups to pCloud when created in Home Assistant
 - Applies retention policies after uploads
 - Provides backup listing, download, and deletion capabilities through Home Assistant's backup UI
 
-To restore a backup:
+### Viewing Backups
+
+All backups (both local and pCloud) are displayed in **Settings** → **System** → **Backups**. Backups stored in pCloud will be automatically shown alongside local backups.
+
+### Restoring a Backup
 
 1. Go to **Settings** → **System** → **Backups**
-2. Select a backup from pCloud
-3. Click **Restore**
+2. Find the backup you want to restore (local or from pCloud)
+3. Click the **three dots menu** next to the backup
+4. Select **Restore**
 
 ## Requirements
 

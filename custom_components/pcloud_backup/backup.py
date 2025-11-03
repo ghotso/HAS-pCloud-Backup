@@ -36,6 +36,9 @@ class PCloudBackupAgent(BackupAgent):
         self.hass = hass
         self.config_entry_id = config_entry_id
         self._api: PCloudAPI | None = None
+        # Set slug and name for backup agent identification
+        self.slug = DOMAIN
+        self.name = "pCloud"
 
     @property
     def api(self) -> PCloudAPI:

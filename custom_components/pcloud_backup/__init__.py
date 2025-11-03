@@ -11,6 +11,11 @@ from .auth import create_auth
 from .backup import PCloudBackupAgent
 from .const import CONF_PASSWORD, CONF_REGION, CONF_USERNAME, DOMAIN, PLATFORMS
 
+try:
+    from homeassistant.components.backup.manager import BackupManager
+except ImportError:
+    BackupManager = None
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -51,11 +56,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Store API instance
     hass.data[DOMAIN][entry.entry_id] = api
 
-    # Register backup agent
-    # Note: BackupAgent instances are automatically registered when instantiated
+    # Create backup agent
+    # Backup agents register themselves automatically when instantiated
+    # if the backup component is loaded (which it should be due to dependencies)
     backup_agent = PCloudBackupAgent(hass, entry.entry_id)
-    # Store backup agent reference for cleanup if needed
     hass.data[DOMAIN][f"{entry.entry_id}_backup_agent"] = backup_agent
+    _LOGGER.info("Created pCloud backup agent")
 
     # Register update listener
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
