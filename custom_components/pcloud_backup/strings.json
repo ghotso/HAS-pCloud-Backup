@@ -1,0 +1,37 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "pCloud Backup Configuration",
+        "description": "Enter your pCloud credentials and select your datacenter region.",
+        "data": {
+          "region": "Region",
+          "username": "Email",
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to pCloud. Please check your credentials and try again.",
+      "invalid_auth": "Authentication failed. Please check your email and password.",
+      "unknown": "Unexpected error occurred: {error}"
+    },
+    "abort": {
+      "already_configured": "This pCloud account is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "pCloud Backup Options",
+        "description": "Configure backup folder and retention settings.",
+        "data": {
+          "backup_folder": "Backup Folder Path",
+          "retention_count": "Keep Last N Backups",
+          "retention_days": "Keep Backups Younger Than N Days"
+        }
+      }
+    }
+  }
+}
+
