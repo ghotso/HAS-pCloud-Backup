@@ -87,6 +87,18 @@ class PCloudBackupAgent(BackupAgent):
             self._api = api
         return self._api
 
+    def _extract_backup_filename(self, backup_name_or_id: str) -> str:
+        """Extract the actual filename from backup_id or backup_name.
+        
+        If backup_name_or_id is in format 'slug:filename', extract filename.
+        Otherwise return as-is.
+        """
+        if ":" in backup_name_or_id:
+            # Format: "pcloud_backup.01K9504EC5X6R90WCNA877EABZ:testbup2.tar"
+            # Extract the part after the colon
+            return backup_name_or_id.split(":", 1)[1]
+        return backup_name_or_id
+
     async def async_get_backup(self, backup_name: str) -> AgentBackup | None:
         """Get backup information by name."""
         try:
@@ -103,6 +115,9 @@ class PCloudBackupAgent(BackupAgent):
 
             # List files to find the backup
             files = await self.api.async_list_folder(folder_id)
+
+            # Extract actual filename from backup_id if needed
+            backup_name = self._extract_backup_filename(backup_name)
 
             # Normalize backup name - check both with and without .tar
             backup_name_with_ext = backup_name if backup_name.endswith(".tar") else f"{backup_name}.tar"
@@ -265,6 +280,9 @@ class PCloudBackupAgent(BackupAgent):
             # List files to find the backup
             files = await self.api.async_list_folder(folder_id)
 
+            # Extract actual filename from backup_id if needed
+            backup_name = self._extract_backup_filename(backup_name)
+
             # Normalize backup name - check both with and without .tar
             backup_name_with_ext = backup_name if backup_name.endswith(".tar") else f"{backup_name}.tar"
             backup_name_without_ext = backup_name.rstrip(".tar")
@@ -318,6 +336,9 @@ class PCloudBackupAgent(BackupAgent):
 
             # List files to find the backup
             files = await self.api.async_list_folder(folder_id)
+
+            # Extract actual filename from backup_id if needed
+            backup_name = self._extract_backup_filename(backup_name)
 
             # Normalize backup name - check both with and without .tar
             backup_name_with_ext = backup_name if backup_name.endswith(".tar") else f"{backup_name}.tar"
