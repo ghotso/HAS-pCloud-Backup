@@ -7,7 +7,8 @@
         "data": {
           "region": "Region",
           "username": "Email",
-          "password": "Password"
+          "password": "Password",
+          "backup_folder": "Backup Folder Path"
         }
       }
     },
@@ -24,11 +25,9 @@
     "step": {
       "init": {
         "title": "pCloud Backup Options",
-        "description": "Configure backup folder and retention settings.",
+        "description": "Configure the backup folder path in pCloud.",
         "data": {
-          "backup_folder": "Backup Folder Path",
-          "retention_count": "Keep Last N Backups",
-          "retention_days": "Keep Backups Younger Than N Days"
+          "backup_folder": "Backup Folder Path"
         }
       }
     }

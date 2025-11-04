@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 import aiohttp
+from homeassistant.util import dt as dt_util
 
 from .const import API_BASE_EU, API_BASE_US
 
@@ -112,7 +113,7 @@ class PCloudDigestAuth(PCloudAuth):
         if not self._auth_token:
             return True
         
-        now = datetime.now()
+        now = datetime.now(dt_util.UTC)
         
         # Check absolute expiration
         if self._token_expire and now >= (self._token_expire - TOKEN_EXPIRY_BUFFER):
@@ -134,7 +135,11 @@ class PCloudDigestAuth(PCloudAuth):
         try:
             # Try standard datetime parsing first
             from email.utils import parsedate_to_datetime
-            return parsedate_to_datetime(dt_str)
+            parsed_dt = parsedate_to_datetime(dt_str)
+            # Ensure timezone-aware (parsedate_to_datetime may return naive)
+            if parsed_dt.tzinfo is None:
+                parsed_dt = parsed_dt.replace(tzinfo=dt_util.UTC)
+            return parsed_dt
         except (ImportError, ValueError, TypeError):
             # Fallback: try common formats
             formats = [
@@ -144,14 +149,18 @@ class PCloudDigestAuth(PCloudAuth):
             ]
             for fmt in formats:
                 try:
-                    return datetime.strptime(dt_str, fmt)
+                    parsed_dt = datetime.strptime(dt_str, fmt)
+                    # Ensure timezone-aware (strptime may return naive)
+                    if parsed_dt.tzinfo is None:
+                        parsed_dt = parsed_dt.replace(tzinfo=dt_util.UTC)
+                    return parsed_dt
                 except ValueError:
                     continue
             return None
 
     def _update_token_expiration(self, result: dict[str, Any]) -> None:
         """Update token expiration information from API response."""
-        self._token_created = datetime.now()
+        self._token_created = datetime.now(dt_util.UTC)
         
         # Parse expiration times if provided
         expire = result.get("expire")
@@ -263,7 +272,7 @@ class PCloudDigestAuth(PCloudAuth):
         # We update it to be N days from now (where N is the inactive expire period)
         if self._token_expire_inactive and self._token_created:
             inactive_period = self._token_expire_inactive - self._token_created
-            self._token_expire_inactive = datetime.now() + inactive_period
+            self._token_expire_inactive = datetime.now(dt_util.UTC) + inactive_period
             _LOGGER.debug("Updated inactive expiration to: %s", self._token_expire_inactive)
 
 

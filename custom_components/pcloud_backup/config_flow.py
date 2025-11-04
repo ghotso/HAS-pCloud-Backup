@@ -16,11 +16,8 @@ from .const import (
     CONF_BACKUP_FOLDER,
     CONF_PASSWORD,
     CONF_REGION,
-    CONF_RETENTION_COUNT,
-    CONF_RETENTION_DAYS,
     CONF_USERNAME,
     DEFAULT_BACKUP_FOLDER,
-    DEFAULT_RETENTION_COUNT,
     DOMAIN,
 )
 
@@ -50,14 +47,6 @@ class PCloudOptionsFlowHandler(OptionsFlow):
                         CONF_BACKUP_FOLDER,
                         default=options.get(CONF_BACKUP_FOLDER, DEFAULT_BACKUP_FOLDER),
                     ): str,
-                    vol.Optional(
-                        CONF_RETENTION_COUNT,
-                        default=options.get(CONF_RETENTION_COUNT, DEFAULT_RETENTION_COUNT),
-                    ): vol.All(vol.Coerce(int), vol.Range(min=1, max=100)),
-                    vol.Optional(
-                        CONF_RETENTION_DAYS,
-                        default=options.get(CONF_RETENTION_DAYS),
-                    ): vol.All(vol.Coerce(int), vol.Range(min=1, max=365)),
                 }
             ),
         )
@@ -103,6 +92,9 @@ class PCloudConfigFlow(ConfigFlow, domain=DOMAIN):
                 await self.async_set_unique_id(username)
                 self._abort_if_unique_id_configured()
 
+                # Get backup folder from user input or use default
+                backup_folder = user_input.get(CONF_BACKUP_FOLDER, DEFAULT_BACKUP_FOLDER)
+
                 # Create entry (password stored in data - HA encrypts it automatically)
                 return self.async_create_entry(
                     title=f"pCloud Backup ({region.upper()})",
@@ -112,9 +104,7 @@ class PCloudConfigFlow(ConfigFlow, domain=DOMAIN):
                         CONF_PASSWORD: password,
                     },
                     options={
-                        CONF_BACKUP_FOLDER: DEFAULT_BACKUP_FOLDER,
-                        CONF_RETENTION_COUNT: DEFAULT_RETENTION_COUNT,
-                        CONF_RETENTION_DAYS: None,
+                        CONF_BACKUP_FOLDER: backup_folder,
                     },
                 )
 
@@ -140,6 +130,10 @@ class PCloudConfigFlow(ConfigFlow, domain=DOMAIN):
                     ),
                     vol.Required(CONF_USERNAME): str,
                     vol.Required(CONF_PASSWORD): str,  # Note: Home Assistant will render as password field
+                    vol.Required(
+                        CONF_BACKUP_FOLDER,
+                        default=DEFAULT_BACKUP_FOLDER,
+                    ): str,
                 }
             ),
             errors=errors,

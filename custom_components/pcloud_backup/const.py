@@ -22,15 +22,9 @@ CONF_REGION = "region"
 CONF_USERNAME = "username"
 CONF_PASSWORD = "password"
 CONF_BACKUP_FOLDER = "backup_folder"
-CONF_RETENTION_COUNT = "retention_count"
-CONF_RETENTION_DAYS = "retention_days"
 
 # Sensor attributes
 ATTR_REMOTE_BACKUP_COUNT = "remote_backup_count"
 ATTR_LAST_REMOTE_BACKUP = "last_remote_backup"
 ATTR_LAST_SYNC_STATUS = "last_sync_status"
-
-# Retention defaults
-DEFAULT_RETENTION_COUNT = 10
-DEFAULT_RETENTION_DAYS = None
 

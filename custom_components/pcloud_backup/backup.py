@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator, Callable, Coroutine
-from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.components.backup import AgentBackup, BackupAgent
@@ -12,8 +11,6 @@ from homeassistant.core import HomeAssistant
 from .api import PCloudAPI, PCloudAPIError
 from .const import (
     CONF_BACKUP_FOLDER,
-    CONF_RETENTION_COUNT,
-    CONF_RETENTION_DAYS,
     DEFAULT_BACKUP_FOLDER,
     DOMAIN,
 )
@@ -121,7 +118,7 @@ class PCloudBackupAgent(BackupAgent):
 
             # Normalize backup name - check both with and without .tar
             backup_name_with_ext = backup_name if backup_name.endswith(".tar") else f"{backup_name}.tar"
-            backup_name_without_ext = backup_name.rstrip(".tar")
+            backup_name_without_ext = backup_name.removesuffix(".tar")
 
             # Find the backup file (check both variants)
             for file_item in files:
@@ -252,9 +249,6 @@ class PCloudBackupAgent(BackupAgent):
             await self.api.async_upload_file(folder_id, backup_name, backup_data)
             _LOGGER.info("Successfully uploaded backup %s", backup_name)
 
-            # Apply retention policy
-            await self._apply_retention_policy(folder_id, options)
-
         except PCloudAPIError as err:
             _LOGGER.error("Failed to upload backup: %s", err)
             raise
@@ -285,7 +279,7 @@ class PCloudBackupAgent(BackupAgent):
 
             # Normalize backup name - check both with and without .tar
             backup_name_with_ext = backup_name if backup_name.endswith(".tar") else f"{backup_name}.tar"
-            backup_name_without_ext = backup_name.rstrip(".tar")
+            backup_name_without_ext = backup_name.removesuffix(".tar")
 
             # Find the backup file (check both variants)
             backup_file = None
@@ -342,7 +336,7 @@ class PCloudBackupAgent(BackupAgent):
 
             # Normalize backup name - check both with and without .tar
             backup_name_with_ext = backup_name if backup_name.endswith(".tar") else f"{backup_name}.tar"
-            backup_name_without_ext = backup_name.rstrip(".tar")
+            backup_name_without_ext = backup_name.removesuffix(".tar")
 
             # Find the backup file (check both variants)
             backup_file = None
@@ -372,57 +366,4 @@ class PCloudBackupAgent(BackupAgent):
         except Exception as err:
             _LOGGER.exception("Unexpected error deleting backup")
             raise BackupNotFound(f"Unexpected error: {err}") from err
-
-    async def _apply_retention_policy(
-        self, folder_id: int, options: dict[str, Any]
-    ) -> None:
-        """Apply retention policy to backups."""
-        try:
-            retention_count = options.get(CONF_RETENTION_COUNT)
-            retention_days = options.get(CONF_RETENTION_DAYS)
-
-            if not retention_count and not retention_days:
-                return
-
-            # List all backups
-            files = await self.api.async_list_folder(folder_id)
-            backups = [self.api.parse_backup_info(file_item) for file_item in files]
-
-            # Sort by modified date (oldest first for deletion)
-            backups.sort(key=lambda x: x.get("modified", ""))
-
-            to_delete: list[dict[str, Any]] = []
-
-            if retention_count:
-                # Keep only the last N backups
-                if len(backups) > retention_count:
-                    to_delete = backups[: len(backups) - retention_count]
-
-            if retention_days:
-                # Remove backups older than N days
-                cutoff_date = datetime.now() - timedelta(days=retention_days)
-                for backup in backups:
-                    modified_str = backup.get("modified", "")
-                    try:
-                        modified_dt = datetime.fromisoformat(modified_str.replace("Z", "+00:00"))
-                        if modified_dt.replace(tzinfo=None) < cutoff_date:
-                            # Only add if not already marked for deletion
-                            if backup not in to_delete:
-                                to_delete.append(backup)
-                    except (ValueError, TypeError):
-                        _LOGGER.warning("Could not parse backup date: %s", modified_str)
-
-            # Delete backups
-            for backup in to_delete:
-                file_id = backup.get("fileid")
-                backup_name = backup.get("name", "unknown")
-                if file_id:
-                    try:
-                        _LOGGER.info("Deleting old backup due to retention policy: %s", backup_name)
-                        await self.api.async_delete_file(file_id)
-                    except Exception as err:
-                        _LOGGER.warning("Failed to delete old backup %s: %s", backup_name, err)
-
-        except Exception as err:
-            _LOGGER.warning("Error applying retention policy: %s", err)
 
