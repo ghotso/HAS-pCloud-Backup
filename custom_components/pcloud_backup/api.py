@@ -244,14 +244,26 @@ class PCloudAPI:
     async def async_get_file_link(self, file_id: int) -> str:
         """Get download link for a file."""
         result = await self._request("GET", "/getfilelink", {"fileid": file_id})
-        metadata = result.get("metadata", {})
 
-        # Follow redirect to get actual download link
-        download_link = metadata.get("hosts", [{}])[0].get("host", "") + metadata.get("path", "")
+        hosts: list[str] | None = None
+        path: str | None = None
 
-        if not download_link.startswith("http"):
-            download_link = f"https://{download_link}"
+        if isinstance(result, dict):
+            if "hosts" in result and "path" in result:
+                hosts = result.get("hosts")
+                path = result.get("path")
+            elif "metadata" in result:
+                metadata = result["metadata"] or {}
+                hosts = metadata.get("hosts")
+                path = metadata.get("path")
 
+        if not hosts or not path:
+            raise PCloudAPIError(
+                f"Invalid getfilelink response for file {file_id}: {result}"
+            )
+
+        host_entry = hosts[0] if isinstance(hosts, list) else hosts
+        download_link = f"https://{host_entry}{path}"
         return download_link
 
     async def async_delete_file(self, file_id: int) -> None:
