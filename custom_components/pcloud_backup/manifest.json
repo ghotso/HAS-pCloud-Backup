@@ -15,8 +15,8 @@
   "requirements": [
     "aiohttp>=3.8.0"
   ],
-  "logo": "logo.png",
-  "icon": "mdi:cloud-upload-outline",
-  "license": "MIT",
-  "version": "0.1.0"
+  "version": "0.1.0",
+  "js_modules": [
+    "custom_components/pcloud_backup/frontend/icon_patch.js"
+  ]
 }

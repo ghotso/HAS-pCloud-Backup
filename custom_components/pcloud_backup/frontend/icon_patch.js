@@ -1,30 +1,41 @@
-const PATCHED_ATTR = "data-pcloud-backup-icon";
-const TARGET_SUFFIX = "/_/pcloud_backup/icon.png";
-const REPLACEMENT_SRC = "/pcloud_backup_static/cloud.svg";
+(() => {
+  const PATCHED_ATTR = "data-pcloud-backup-icon";
+  const TARGET_SUFFIX = "/_/pcloud_backup/icon.png";
 
-const applyPatch = (img) => {
-  if (img.hasAttribute(PATCHED_ATTR)) {
-    return;
-  }
-  img.setAttribute(PATCHED_ATTR, "1");
-  img.src = REPLACEMENT_SRC;
-};
+  const createCloudIcon = () => {
+    const icon = document.createElement("ha-svg-icon");
+    icon.setAttribute("icon", "mdi:cloud");
+    icon.setAttribute("style", "flex-shrink:0;width:24px;height:24px;");
+    return icon;
+  };
 
-const scanAndPatch = () => {
-  document
-    .querySelectorAll(`img[src$="${TARGET_SUFFIX}"]`)
-    .forEach(applyPatch);
-};
+  const applyPatch = (img) => {
+    if (img.hasAttribute(PATCHED_ATTR)) {
+      return;
+    }
 
-const observer = new MutationObserver(() => scanAndPatch());
+    const cloudIcon = createCloudIcon();
+    img.replaceWith(cloudIcon);
+    cloudIcon.setAttribute(PATCHED_ATTR, "1");
+  };
 
-if (window.customElements) {
-  window.addEventListener("DOMContentLoaded", () => {
+  const scanAndPatch = () => {
+    document
+      .querySelectorAll(`img[src$="${TARGET_SUFFIX}"]`)
+      .forEach(applyPatch);
+  };
+
+  const observer = new MutationObserver(scanAndPatch);
+
+  const start = () => {
     scanAndPatch();
     observer.observe(document.body, { childList: true, subtree: true });
-  });
-} else {
-  scanAndPatch();
-}
+  };
 
+  if (document.readyState === "loading") {
+    window.addEventListener("DOMContentLoaded", start);
+  } else {
+    start();
+  }
+})();
 
