@@ -1,8 +1,6 @@
 {
   "name": "pCloud Backup",
   "render_readme": true,
-  "domains": ["pcloud_backup"],
-  "iot_class": "Cloud Polling",
   "homeassistant": "2025.1.0"
 }
 
