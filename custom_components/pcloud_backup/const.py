@@ -1,6 +1,10 @@
 """Constants for the pCloud Backup integration."""
 from __future__ import annotations
 
+from collections.abc import Callable
+
+from homeassistant.util.hass_dict import HassKey
+
 DOMAIN = "pcloud_backup"
 
 # API Endpoints
@@ -27,4 +31,9 @@ CONF_BACKUP_FOLDER = "backup_folder"
 ATTR_REMOTE_BACKUP_COUNT = "remote_backup_count"
 ATTR_LAST_REMOTE_BACKUP = "last_remote_backup"
 ATTR_LAST_SYNC_STATUS = "last_sync_status"
+
+# Backup agent listener storage key
+DATA_BACKUP_AGENT_LISTENERS: HassKey[list[Callable[[], None]]] = HassKey(
+    f"{DOMAIN}.backup_agent_listeners"
+)
 

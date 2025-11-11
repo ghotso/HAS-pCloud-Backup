@@ -6,16 +6,56 @@ from collections.abc import AsyncIterator, Callable, Coroutine
 from typing import Any
 
 from homeassistant.components.backup import AgentBackup, BackupAgent
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 
 from .api import PCloudAPI, PCloudAPIError
 from .const import (
     CONF_BACKUP_FOLDER,
+    DATA_BACKUP_AGENT_LISTENERS,
     DEFAULT_BACKUP_FOLDER,
     DOMAIN,
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+async def async_get_backup_agents(hass: HomeAssistant) -> list[BackupAgent]:
+    """Return the list of pCloud backup agents."""
+    agents: list[BackupAgent] = []
+    for entry in hass.config_entries.async_loaded_entries(DOMAIN):
+        api: PCloudAPI | None = getattr(entry, "runtime_data", None)
+        if api is None:
+            continue
+        agent = PCloudBackupAgent(
+            hass=hass,
+            config_entry_id=entry.entry_id,
+            api=api,
+            name=entry.title or "pCloud",
+        )
+        agents.append(agent)
+    return agents
+
+
+@callback
+def async_register_backup_agents_listener(
+    hass: HomeAssistant,
+    *,
+    listener: Callable[[], None],
+    **kwargs: Any,
+) -> Callable[[], None]:
+    """Register a listener to be called when agents are added or removed."""
+    hass.data.setdefault(DATA_BACKUP_AGENT_LISTENERS, []).append(listener)
+
+    @callback
+    def remove_listener() -> None:
+        """Remove the registered listener."""
+        listeners = hass.data.get(DATA_BACKUP_AGENT_LISTENERS, [])
+        if listener in listeners:
+            listeners.remove(listener)
+            if not listeners:
+                hass.data.pop(DATA_BACKUP_AGENT_LISTENERS)
+
+    return remove_listener
 
 
 class BackupNotFound(Exception):
@@ -29,15 +69,18 @@ class PCloudBackupAgent(BackupAgent):
         self,
         hass: HomeAssistant,
         config_entry_id: str,
+        *,
+        api: PCloudAPI | None = None,
+        name: str = "pCloud",
     ) -> None:
         """Initialize the backup agent."""
         self.hass = hass
         self.config_entry_id = config_entry_id
-        self._api: PCloudAPI | None = None
+        self._api: PCloudAPI | None = api
         # Required attributes for BackupAgent
         self.domain = DOMAIN
         self.unique_id = config_entry_id
-        self.name = "pCloud"
+        self.name = name
         # Slug must be in format "{domain}.{unique_id}" for Home Assistant backup system
         self.slug = f"{DOMAIN}.{config_entry_id}"
 
