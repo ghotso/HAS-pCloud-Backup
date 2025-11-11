@@ -181,7 +181,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 [releases-shield]: https://shields.ghotso.dev/github/v/release/ghotso/HAS-pCloud-Backup?style=for-the-badge
 [releases]: https://github.com/ghotso/HAS-pcloud-Backup/releases
-[license-shield]: https://shields.ghotso.dev/github/license/ghotso/HAS-pCloud-Backup?style=for-the-badge
+[license-shield]: https://shields.ghotso.dev/github/license/ghotso/HAS-pCloud-Backup?style=for-the-badge&color=orange
 [hacs]: https://github.com/hacs/integration
 [hacsbadge]: https://shields.ghotso.dev/badge/HACS-CUSTOM-orange?style=for-the-badge
 
