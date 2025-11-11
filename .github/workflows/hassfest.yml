@@ -1,4 +1,6 @@
 name: Hassfest
+permissions:
+  contents: read
 
 on:
   push:
