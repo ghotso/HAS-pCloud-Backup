@@ -1,6 +1,7 @@
 """Backup agent implementation for pCloud."""
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import AsyncIterator, Callable, Coroutine
 from typing import Any
@@ -17,6 +18,9 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+METADATA_SUFFIX = ".metadata.json"
+METADATA_VERSION = 1
 
 
 async def async_get_backup_agents(hass: HomeAssistant) -> list[BackupAgent]:
@@ -84,6 +88,123 @@ class PCloudBackupAgent(BackupAgent):
         # Slug must be in format "{domain}.{unique_id}" for Home Assistant backup system
         self.slug = f"{DOMAIN}.{config_entry_id}"
 
+    def _metadata_key_from_backup_name(self, filename: str) -> str:
+        """Return metadata key (name without .tar) for a backup filename."""
+        if filename.endswith(".tar"):
+            return filename[: -len(".tar")]
+        return filename
+
+    def _metadata_key_from_metadata_name(self, filename: str) -> str:
+        """Return metadata key for a metadata filename."""
+        return filename[: -len(METADATA_SUFFIX)]
+
+    def _metadata_key_from_input(self, backup_name_or_id: str) -> str:
+        """Return metadata key from backup identifier (name or backup_id)."""
+        file_name = self._extract_backup_filename(backup_name_or_id)
+        return self._metadata_key_from_backup_name(file_name)
+
+    async def _async_get_folder_items(
+        self, folder_id: int
+    ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+        """Return dicts of backup files and metadata files keyed by metadata key."""
+        files = await self.api.async_list_folder(folder_id)
+        backup_files: dict[str, dict[str, Any]] = {}
+        metadata_files: dict[str, dict[str, Any]] = {}
+
+        for file_item in files:
+            name = file_item.get("name", "")
+            if not name:
+                continue
+            if name.endswith(METADATA_SUFFIX):
+                metadata_key = self._metadata_key_from_metadata_name(name)
+                metadata_files[metadata_key] = file_item
+            else:
+                metadata_key = self._metadata_key_from_backup_name(name)
+                backup_files[metadata_key] = file_item
+
+        return backup_files, metadata_files
+
+    async def _async_load_metadata(
+        self,
+        metadata_item: dict[str, Any],
+        backup_name: str,
+        backup_file_item: dict[str, Any],
+    ) -> AgentBackup | None:
+        """Load metadata file and return AgentBackup if available."""
+        file_id = metadata_item.get("fileid")
+        if file_id is None:
+            return None
+        try:
+            metadata_bytes = await self.api.async_download_file(file_id)
+            payload = json.loads(metadata_bytes.decode("utf-8"))
+            metadata_version = payload.get("metadata_version")
+            if metadata_version not in (None, METADATA_VERSION):
+                _LOGGER.debug(
+                    "Ignoring metadata for %s due to unsupported version %s",
+                    backup_name,
+                    metadata_version,
+                )
+                return None
+            backup_dict = payload.get("backup", payload)
+            if (size := backup_file_item.get("size")) is not None:
+                backup_dict = {**backup_dict, "size": size}
+            agent_backup = AgentBackup.from_dict(backup_dict)
+            # Ensure backup_id uses our slug (older versions may differ)
+            if not agent_backup.backup_id.startswith(f"{self.slug}:"):
+                agent_backup = AgentBackup.from_dict(
+                    {
+                        **backup_dict,
+                        "backup_id": f"{self.slug}:{agent_backup.name}",
+                    }
+                )
+            return agent_backup
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning(
+                "Failed to load metadata for backup %s: %s", backup_name, err
+            )
+            return None
+
+    def _create_backup_from_file(
+        self, file_item: dict[str, Any], backup_name: str
+    ) -> AgentBackup:
+        """Create AgentBackup object from file information as a fallback."""
+        backup_dict = self.api.parse_backup_info(file_item)
+        backup_id = f"{self.slug}:{backup_dict.get('name', backup_name)}"
+        return AgentBackup(
+            name=backup_dict.get("name", backup_name),
+            date=backup_dict.get("modified", ""),
+            size=backup_dict.get("size", 0),
+            backup_id=backup_id,
+            addons=[],
+            database_included=True,
+            extra_metadata={},
+            folders=[],
+            homeassistant_included=True,
+            homeassistant_version="",
+            protected=False,
+        )
+
+    async def _async_get_agent_backup(
+        self,
+        backup_files: dict[str, dict[str, Any]],
+        metadata_files: dict[str, dict[str, Any]],
+        metadata_key: str,
+    ) -> AgentBackup | None:
+        """Return AgentBackup constructed from available data."""
+        file_item = backup_files.get(metadata_key)
+        if file_item is None:
+            return None
+        backup_name = file_item.get("name", metadata_key)
+        metadata_item = metadata_files.get(metadata_key)
+        if metadata_item:
+            agent_backup = await self._async_load_metadata(
+                metadata_item, backup_name, file_item
+            )
+            if agent_backup:
+                return agent_backup
+
+        return self._create_backup_from_file(file_item, backup_name)
+
     @property
     def available(self) -> bool:
         """Return if the backup agent is available.
@@ -150,41 +271,15 @@ class PCloudBackupAgent(BackupAgent):
             options = config_entry.options
             backup_folder = options.get(CONF_BACKUP_FOLDER, DEFAULT_BACKUP_FOLDER)
 
-            # Get folder ID
             folder_id = await self.api.async_get_folder_id(backup_folder)
+            backup_files, metadata_files = await self._async_get_folder_items(folder_id)
 
-            # List files to find the backup
-            files = await self.api.async_list_folder(folder_id)
+            metadata_key = self._metadata_key_from_input(backup_name)
+            agent_backup = await self._async_get_agent_backup(
+                backup_files, metadata_files, metadata_key
+            )
 
-            # Extract actual filename from backup_id if needed
-            backup_name = self._extract_backup_filename(backup_name)
-
-            # Normalize backup name - check both with and without .tar
-            backup_name_with_ext = backup_name if backup_name.endswith(".tar") else f"{backup_name}.tar"
-            backup_name_without_ext = backup_name.removesuffix(".tar")
-
-            # Find the backup file (check both variants)
-            for file_item in files:
-                file_name = file_item.get("name", "")
-                if file_name == backup_name or file_name == backup_name_with_ext or file_name == backup_name_without_ext:
-                    backup_dict = self.api.parse_backup_info(file_item)
-                    # Convert to AgentBackup object with all required parameters
-                    backup_id = f"{self.slug}:{backup_dict.get('name', backup_name)}"
-                    return AgentBackup(
-                        name=backup_dict.get("name", backup_name),
-                        date=backup_dict.get("modified", ""),
-                        size=backup_dict.get("size", 0),
-                        backup_id=backup_id,
-                        addons=[],  # We don't have addon info from pCloud
-                        database_included=True,  # Assume included
-                        extra_metadata={},  # No extra metadata available
-                        folders=[],  # We don't have folder info from pCloud
-                        homeassistant_included=True,  # Assume included
-                        homeassistant_version="",  # Not available from pCloud
-                        protected=False,  # Default to not protected
-                    )
-
-            return None
+            return agent_backup
 
         except PCloudAPIError as err:
             _LOGGER.error("Failed to get backup: %s", err)
@@ -208,40 +303,17 @@ class PCloudBackupAgent(BackupAgent):
             # Get or create folder
             folder_id = await self.api.async_get_folder_id(backup_folder)
             _LOGGER.debug("Backup folder ID: %s", folder_id)
+            backup_files, metadata_files = await self._async_get_folder_items(folder_id)
 
-            # List files in folder
-            files = await self.api.async_list_folder(folder_id)
-            _LOGGER.info("Found %d files in backup folder", len(files))
+            backups: list[AgentBackup] = []
+            for metadata_key in backup_files:
+                agent_backup = await self._async_get_agent_backup(
+                    backup_files, metadata_files, metadata_key
+                )
+                if agent_backup:
+                    backups.append(agent_backup)
 
-            # Parse backup info and convert to AgentBackup objects
-            backup_dicts = [self.api.parse_backup_info(file_item) for file_item in files]
-            _LOGGER.debug("Parsed %d backups: %s", len(backup_dicts), [b.get("name") for b in backup_dicts])
-
-            # Sort by modified date (newest first)
-            backup_dicts.sort(key=lambda x: x.get("modified", ""), reverse=True)
-
-            # Convert dicts to AgentBackup objects
-            backups = []
-            for backup_dict in backup_dicts:
-                backup_name = backup_dict.get("name", "")
-                if backup_name:
-                    # Create AgentBackup object with all required parameters
-                    backup_id = f"{self.slug}:{backup_name}"
-                    backup = AgentBackup(
-                        name=backup_name,
-                        date=backup_dict.get("modified", ""),
-                        size=backup_dict.get("size", 0),
-                        backup_id=backup_id,
-                        addons=[],  # We don't have addon info from pCloud
-                        database_included=True,  # Assume included (default for backups)
-                        extra_metadata={},  # No extra metadata available
-                        folders=[],  # We don't have folder info from pCloud
-                        homeassistant_included=True,  # Assume included
-                        homeassistant_version="",  # Not available from pCloud
-                        protected=False,  # Default to not protected
-                    )
-                    backups.append(backup)
-
+            backups.sort(key=lambda backup: backup.date or "", reverse=True)
             _LOGGER.info("Returning %d backups from pCloud", len(backups))
             return backups
 
@@ -290,6 +362,36 @@ class PCloudBackupAgent(BackupAgent):
 
             # Upload to pCloud
             await self.api.async_upload_file(folder_id, backup_name, backup_data)
+
+            # Upload metadata so we can faithfully reconstruct the AgentBackup
+            metadata_key = self._metadata_key_from_backup_name(backup_name)
+            metadata_filename = f"{metadata_key}{METADATA_SUFFIX}"
+            metadata_payload = json.dumps(
+                {"metadata_version": METADATA_VERSION, "backup": backup.as_dict()},
+                ensure_ascii=False,
+            ).encode("utf-8")
+            try:
+                await self.api.async_upload_file(
+                    folder_id, metadata_filename, metadata_payload
+                )
+            except Exception as err:
+                _LOGGER.error(
+                    "Failed to upload metadata for backup %s: %s", backup_name, err
+                )
+                # Attempt to remove the backup file so we don't leave a partial upload
+                try:
+                    backup_files, _ = await self._async_get_folder_items(folder_id)
+                    backup_file = backup_files.get(metadata_key)
+                    if backup_file and backup_file.get("fileid"):
+                        await self.api.async_delete_file(backup_file["fileid"])
+                except Exception as cleanup_err:  # noqa: BLE001
+                    _LOGGER.warning(
+                        "Failed to clean up backup %s after metadata error: %s",
+                        backup_name,
+                        cleanup_err,
+                    )
+                raise
+
             _LOGGER.info("Successfully uploaded backup %s", backup_name)
 
         except PCloudAPIError as err:
@@ -314,23 +416,9 @@ class PCloudBackupAgent(BackupAgent):
             # Get folder ID
             folder_id = await self.api.async_get_folder_id(backup_folder)
 
-            # List files to find the backup
-            files = await self.api.async_list_folder(folder_id)
-
-            # Extract actual filename from backup_id if needed
-            backup_name = self._extract_backup_filename(backup_name)
-
-            # Normalize backup name - check both with and without .tar
-            backup_name_with_ext = backup_name if backup_name.endswith(".tar") else f"{backup_name}.tar"
-            backup_name_without_ext = backup_name.removesuffix(".tar")
-
-            # Find the backup file (check both variants)
-            backup_file = None
-            for file_item in files:
-                file_name = file_item.get("name", "")
-                if file_name == backup_name or file_name == backup_name_with_ext or file_name == backup_name_without_ext:
-                    backup_file = file_item
-                    break
+            backup_files, _ = await self._async_get_folder_items(folder_id)
+            metadata_key = self._metadata_key_from_input(backup_name)
+            backup_file = backup_files.get(metadata_key)
 
             if backup_file is None:
                 raise BackupNotFound(f"Backup {backup_name} not found in pCloud")
@@ -371,23 +459,9 @@ class PCloudBackupAgent(BackupAgent):
             # Get folder ID
             folder_id = await self.api.async_get_folder_id(backup_folder)
 
-            # List files to find the backup
-            files = await self.api.async_list_folder(folder_id)
-
-            # Extract actual filename from backup_id if needed
-            backup_name = self._extract_backup_filename(backup_name)
-
-            # Normalize backup name - check both with and without .tar
-            backup_name_with_ext = backup_name if backup_name.endswith(".tar") else f"{backup_name}.tar"
-            backup_name_without_ext = backup_name.removesuffix(".tar")
-
-            # Find the backup file (check both variants)
-            backup_file = None
-            for file_item in files:
-                file_name = file_item.get("name", "")
-                if file_name == backup_name or file_name == backup_name_with_ext or file_name == backup_name_without_ext:
-                    backup_file = file_item
-                    break
+            backup_files, metadata_files = await self._async_get_folder_items(folder_id)
+            metadata_key = self._metadata_key_from_input(backup_name)
+            backup_file = backup_files.get(metadata_key)
 
             if backup_file is None:
                 raise BackupNotFound(f"Backup {backup_name} not found in pCloud")
@@ -399,6 +473,16 @@ class PCloudBackupAgent(BackupAgent):
 
             _LOGGER.info("Deleting backup %s from pCloud", backup_name)
             await self.api.async_delete_file(file_id)
+            # Also remove metadata file if present
+            metadata_item = metadata_files.get(metadata_key)
+            if metadata_item and metadata_item.get("fileid"):
+                try:
+                    await self.api.async_delete_file(metadata_item["fileid"])
+                except Exception as err:  # noqa: BLE001
+                    _LOGGER.warning(
+                        "Failed to delete metadata for backup %s: %s", backup_name, err
+                    )
+
             _LOGGER.info("Successfully deleted backup %s", backup_name)
 
         except BackupNotFound:
