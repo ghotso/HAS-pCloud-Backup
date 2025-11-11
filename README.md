@@ -179,9 +179,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - Home Assistant team for the backup system architecture
 - Community contributors
 
-[releases-shield]: https://img.shields.io/github/release/ghotso/HAS-pcloud-Backup.svg?style=for-the-badge
+[releases-shield]: https://shields.ghotso.dev/github/v/release/ghotso/HAS-pCloud-Backup?style=for-the-badge
 [releases]: https://github.com/ghotso/HAS-pcloud-Backup/releases
 [license-shield]: https://shields.ghotso.dev/github/license/ghotso/HAS-pCloud-Backup?style=for-the-badge
 [hacs]: https://github.com/hacs/integration
-[hacsbadge]: https://img.shields.io/badge/HACS-Custom-orange.svg?style=for-the-badge
+[hacsbadge]: https://shields.ghotso.dev/badge/HACS-CUSTOM-orange?style=for-the-badge
 
