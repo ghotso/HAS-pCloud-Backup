@@ -108,6 +108,8 @@ class PCloudBackupAgent(BackupAgent):
 
     def _metadata_key_for_backup(self, backup: AgentBackup) -> str:
         """Return metadata key for a specific AgentBackup."""
+        if backup.backup_id.startswith(f"{self.slug}:"):
+            return backup.backup_id.split(":", 1)[1]
         return Path(suggested_filename(backup)).stem
 
     def _decode_display_name(self, name: str) -> str:
@@ -143,6 +145,7 @@ class PCloudBackupAgent(BackupAgent):
         self,
         metadata_item: dict[str, Any],
         backup_name: str,
+        metadata_key: str,
         backup_file_item: dict[str, Any],
     ) -> AgentBackup | None:
         """Load metadata file and return AgentBackup if available."""
@@ -161,31 +164,42 @@ class PCloudBackupAgent(BackupAgent):
                 )
                 return None
             backup_dict = payload.get("backup", payload)
+            backup_dict = dict(backup_dict)  # shallow copy
             if "metadata_version" in backup_dict:
                 backup_dict = {
                     key: value for key, value in backup_dict.items() if key != "metadata_version"
                 }
             if "extra_metadata" not in backup_dict:
                 backup_dict = {**backup_dict, "extra_metadata": {}}
+            extra_metadata = dict(backup_dict["extra_metadata"])
+            if "original_backup_id" not in extra_metadata:
+                extra_metadata["original_backup_id"] = backup_dict.get("backup_id")
+
+            backup_dict["extra_metadata"] = extra_metadata
+            backup_dict["backup_id"] = f"{self.slug}:{metadata_key}"
+
             if (size := backup_file_item.get("size")) is not None:
                 backup_dict = {**backup_dict, "size": size}
             agent_backup = AgentBackup.from_dict(backup_dict)
             return agent_backup
         except Exception as err:  # noqa: BLE001
             _LOGGER.warning(
-                "Failed to load metadata for backup %s: %s", backup_name, err
+                "Failed to load metadata for backup %s (key=%s file=%s): %r; metadata_item=%s",
+                backup_name,
+                metadata_key,
+                file_id,
+                err,
+                metadata_item,
             )
             return None
 
     def _create_backup_from_file(
-        self, file_item: dict[str, Any], backup_name: str
+        self, file_item: dict[str, Any], metadata_key: str
     ) -> AgentBackup:
         """Create AgentBackup object from file information as a fallback."""
         backup_dict = self.api.parse_backup_info(file_item)
-        fallback_name = self._decode_display_name(
-            backup_dict.get("name", backup_name)
-        )
-        backup_id = f"{self.slug}:{fallback_name}"
+        fallback_name = self._decode_display_name(backup_dict.get("name", metadata_key))
+        backup_id = f"{self.slug}:{metadata_key}"
         return AgentBackup(
             name=fallback_name,
             date=backup_dict.get("modified", ""),
@@ -214,12 +228,12 @@ class PCloudBackupAgent(BackupAgent):
         metadata_item = metadata_files.get(metadata_key)
         if metadata_item:
             agent_backup = await self._async_load_metadata(
-                metadata_item, backup_name, file_item
+                metadata_item, backup_name, metadata_key, file_item
             )
             if agent_backup:
                 return agent_backup
 
-        return self._create_backup_from_file(file_item, backup_name)
+        return self._create_backup_from_file(file_item, metadata_key)
 
     async def _async_collect_backups(
         self, folder_id: int
@@ -242,6 +256,9 @@ class PCloudBackupAgent(BackupAgent):
                 continue
             backups_by_key[metadata_key] = agent_backup
             backup_id_index[agent_backup.backup_id] = metadata_key
+            original_backup_id = agent_backup.extra_metadata.get("original_backup_id")
+            if isinstance(original_backup_id, str):
+                backup_id_index[original_backup_id] = metadata_key
 
         return backups_by_key, backup_id_index, backup_files, metadata_files
 
@@ -357,7 +374,6 @@ class PCloudBackupAgent(BackupAgent):
             backups_by_key, _, _, _ = await self._async_collect_backups(folder_id)
 
             backups = list(backups_by_key.values())
-
             backups.sort(key=lambda backup: backup.date or "", reverse=True)
             _LOGGER.info("Returning %d backups from pCloud", len(backups))
             return backups
@@ -425,8 +441,15 @@ class PCloudBackupAgent(BackupAgent):
             await self.api.async_upload_file(folder_id, backup_name, backup_data)
 
             # Upload metadata so we can faithfully reconstruct the AgentBackup
+            backup_dict = backup.as_dict()
+            original_backup_id = backup_dict.get("backup_id")
+            backup_dict["backup_id"] = f"{self.slug}:{metadata_key}"
+            extra_metadata = dict(backup_dict.get("extra_metadata", {}))
+            if original_backup_id and extra_metadata.get("original_backup_id") is None:
+                extra_metadata["original_backup_id"] = original_backup_id
+            backup_dict["extra_metadata"] = extra_metadata
             metadata_payload = json.dumps(
-                {"metadata_version": METADATA_VERSION, "backup": backup.as_dict()},
+                {"metadata_version": METADATA_VERSION, "backup": backup_dict},
                 ensure_ascii=False,
             ).encode("utf-8")
             try:
