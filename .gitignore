@@ -62,3 +62,5 @@ dist/
 build/
 *.egg-info/
 
+# pCloud Backup
+zip-releases/
