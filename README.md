@@ -20,7 +20,7 @@ A native Home Assistant Backup Agent integration for pCloud, enabling users to s
 
 ### HACS (Recommended)
 
-[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=ghotso&category=Backup&repository=HAS-pCloud-Backup)
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=ghotso&repository=HAS-pCloud-Backup)
 
 1. Open HACS in Home Assistant
 2. Go to **Integrations**
