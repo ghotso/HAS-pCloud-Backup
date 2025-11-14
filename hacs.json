@@ -1,6 +1,8 @@
 {
   "name": "pCloud Backup",
   "render_readme": true,
+  "zip_release": true,
+  "filename": "pcloud_backup.zip",
   "homeassistant": "2025.1.0"
 }
 
