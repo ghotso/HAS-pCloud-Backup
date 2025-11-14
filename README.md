@@ -3,6 +3,8 @@
 [![GitHub Release][releases-shield]][releases]
 [![License][license-shield]](LICENSE)
 [![hacs][hacsbadge]][hacs]
+[![Downloads][hacsdownloads-shield]][hacsdownloads]
+
 
 A native Home Assistant Backup Agent integration for pCloud, enabling users to store, restore, and manage encrypted Home Assistant backups directly in their pCloud account.
 
@@ -180,5 +182,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 [license-shield]: https://shields.ghotso.dev/github/license/ghotso/HAS-pCloud-Backup?style=for-the-badge&color=orange
 [hacs]: https://github.com/hacs/integration
 [hacsbadge]: https://img.shields.io/badge/HACS-Default-blue?style=for-the-badge
+[hacsdownloads-shield]: https://shields.ghotso.dev/github/downloads/ghotso/HAS-pCloud-Backup/latest/total?label=Downloads&style=for-the-badge
+[hacsdownloads]: https://github.com/ghotso/HAS-pCloud-Backup/releases/latest
+(https://shields.ghotso.dev/github/downloads/ghotso/HAS-pCloud-Backup/latest/total?label=Downloads)
+
 
 last updated: 13.11.2025
