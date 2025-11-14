@@ -47,12 +47,12 @@ def _ensure_frontend_module(hass: HomeAssistant) -> None:
             StaticPathConfig(
                 ICON_MODULE_URL,
                 str(source_path),
-                cache=False,
+                cache_headers=False,
             )
         ]
     )
 
-    frontend.add_extra_module_url(hass, ICON_MODULE_URL)
+    frontend.add_extra_js_url(hass, ICON_MODULE_URL)
     domain_data[ICON_MODULE_NAME] = True
 
 
