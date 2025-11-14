@@ -6,7 +6,9 @@
   ],
   "config_flow": true,
   "dependencies": [
-    "backup"
+    "backup",
+    "http",
+    "frontend"
   ],
   "documentation": "https://github.com/ghotso/HAS-pcloud-Backup",
   "integration_type": "hub",
