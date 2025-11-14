@@ -12,7 +12,6 @@ A native Home Assistant Backup Agent integration for pCloud, enabling users to s
 - ✅ **Region Support** - Choose between EU or US pCloud datacenters
 - ✅ **Automatic Uploads** - Integrates seamlessly with Home Assistant's backup system
 - ✅ **Backup Management** - List, download, and delete backups from pCloud directly in Home Assistant
-- ✅ **Retention Policies** - Automatic cleanup based on count or age
 - ✅ **Monitoring Sensors** - Track backup count, last backup time, and sync status
 - ✅ **Encrypted Backups** - Uses Home Assistant's built-in backup encryption
 - ✅ **Native Backup Agent** - Fully integrated with Home Assistant's backup UI
@@ -20,6 +19,8 @@ A native Home Assistant Backup Agent integration for pCloud, enabling users to s
 ## Installation
 
 ### HACS (Recommended)
+
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=ghotso&category=Backup&repository=HAS-pCloud-Backup)
 
 1. Open HACS in Home Assistant
 2. Go to **Integrations**
@@ -52,13 +53,10 @@ A native Home Assistant Backup Agent integration for pCloud, enabling users to s
    - **Region**: Select EU or US based on your account's datacenter
 3. The integration will test the connection and automatically register as a backup agent
 
-### Options
+### Storage Path
 
-Configure the following options via **Settings** → **Devices & Services** → **pCloud Backup** → **Options**:
-
-- **Backup Folder Path**: Path in pCloud where backups will be stored (default: `/HomeAssistant/Backups`)
-- **Keep Last N Backups**: Automatically delete older backups, keeping only the specified number
-- **Keep Backups Younger Than N Days**: Automatically delete backups older than the specified number of days
+During the initial setup you pick the folder inside pCloud that will hold your backups (default: `/HomeAssistant/Backups`).  
+Currently the path can only be set during onboarding—if you need to change it later, remove the integration and add it again.
 
 ## Sensors
 
@@ -77,10 +75,8 @@ The integration provides the following sensors:
 3. Select **Create Backup**
 4. The backup will be created locally and automatically uploaded to pCloud
 
-The integration automatically:
-- Uploads backups to pCloud when created in Home Assistant
-- Applies retention policies after uploads
-- Provides backup listing, download, and deletion capabilities through Home Assistant's backup UI
+The integration automatically uploads every Home Assistant backup to pCloud.  
+Retention, encryption, scheduling and all other logic are entirely handled by the standard Home Assistant backup system—pCloud simply provides the remote storage destination.
 
 ### Viewing Backups
 
@@ -183,6 +179,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 [releases]: https://github.com/ghotso/HAS-pcloud-Backup/releases
 [license-shield]: https://shields.ghotso.dev/github/license/ghotso/HAS-pCloud-Backup?style=for-the-badge&color=orange
 [hacs]: https://github.com/hacs/integration
-[hacsbadge]: https://shields.ghotso.dev/badge/HACS-CUSTOM-orange?style=for-the-badge
+[hacsbadge]: https://img.shields.io/badge/HACS-Default-blue?style=for-the-badge
 
 last updated: 13.11.2025
