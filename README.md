@@ -185,4 +185,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 [hacs]: https://github.com/hacs/integration
 [hacsbadge]: https://shields.ghotso.dev/badge/HACS-CUSTOM-orange?style=for-the-badge
 
-last updated: 13.11.2025
+last updated: 14.11.2025
