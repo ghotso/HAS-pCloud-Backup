@@ -1,6 +1,6 @@
-name: Bug report
-description: Report a problem with the HAS pCloud Backup integration.
-title: "[Bug]: "
+name: "Bug report 🐞"
+description: "Found something broken? Help us squash it!"
+title: "🐞 [Bug]: "
 labels:
   - bug
   - needs triage
@@ -8,19 +8,19 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for taking the time to report a bug. Please review the existing issues before opening a new one.
+        Thanks for taking the time to report a bug! 🙏 Please review the existing issues before opening a new one.
   - type: input
     id: contact
     attributes:
-      label: Contact details
-      description: How can we get in touch with you if we need more info? (optional)
+      label: Contact details ☎️
+      description: How can we get in touch if we need more info? (optional)
       placeholder: username on Discord, email, etc.
     validations:
       required: false
   - type: textarea
     id: description
     attributes:
-      label: What happened?
+      label: What happened? 🤔
       description: Provide a clear and concise description of the problem.
       placeholder: When I try to start a backup...
     validations:
@@ -28,7 +28,7 @@ body:
   - type: textarea
     id: reproduction_steps
     attributes:
-      label: Steps to reproduce
+      label: Steps to reproduce 🧪
       description: List each step so we can reproduce the issue.
       placeholder: |
         1. Go to ...
@@ -39,29 +39,29 @@ body:
   - type: textarea
     id: expected
     attributes:
-      label: Expected behavior
+      label: Expected behavior ✅
       description: What did you expect to happen?
     validations:
       required: true
   - type: textarea
     id: screenshots
     attributes:
-      label: Screenshots
-      description: Add screenshots or screen recordings if applicable. Drag and drop files here.
+      label: Screenshots 📸
+      description: Add screenshots or recordings if helpful. Drag & drop files here.
     validations:
       required: false
   - type: textarea
     id: logs
     attributes:
-      label: Relevant logs
-      description: Paste any error traces or logs. Remove sensitive information.
+      label: Relevant logs 🧾
+      description: Paste error traces or logs (remove sensitive info).
       render: shell
     validations:
       required: false
   - type: input
     id: integration_version
     attributes:
-      label: Integration version
+      label: Integration version 🔢
       description: Version of the HAS pCloud Backup integration you are using.
       placeholder: v1.2.3
     validations:
@@ -69,7 +69,7 @@ body:
   - type: input
     id: ha_version
     attributes:
-      label: Home Assistant version
+      label: Home Assistant version 🏠
       description: Version of Home Assistant where the issue occurs.
       placeholder: 2024.10.1
     validations:
@@ -77,7 +77,7 @@ body:
   - type: input
     id: install_method
     attributes:
-      label: Installation method
+      label: Installation method 🛠️
       description: How did you install this integration? (HACS, manual, etc.)
       placeholder: HACS
     validations:
@@ -85,7 +85,7 @@ body:
   - type: textarea
     id: additional_context
     attributes:
-      label: Additional context
+      label: Additional context 💬
       description: Add any other context about the problem here.
     validations:
       required: false

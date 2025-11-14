@@ -1,0 +1,42 @@
+name: "Question ❓"
+description: Ask for clarification or guidance about HAS pCloud Backup.
+title: "❓ [Question]: "
+labels:
+  - question
+  - needs triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Need help understanding something? Drop your question below and we'll do our best to guide you! 🙋
+  - type: input
+    id: contact
+    attributes:
+      label: Contact details ☎️
+      description: How can we reach you if we need more info? (optional)
+      placeholder: Discord username, email, etc.
+    validations:
+      required: false
+  - type: textarea
+    id: question
+    attributes:
+      label: What's your question? 🤔
+      description: Describe what you want to understand or achieve.
+      placeholder: I'm trying to figure out how to...
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context 🧩
+      description: Share any relevant details (configuration, logs, screenshots).
+    validations:
+      required: false
+  - type: textarea
+    id: attempts
+    attributes:
+      label: What have you tried? 🛠️
+      description: Let us know the steps you've already taken.
+    validations:
+      required: false
+
