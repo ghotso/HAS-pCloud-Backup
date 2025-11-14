@@ -8,6 +8,7 @@ from pathlib import Path
 from homeassistant.components import frontend
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.components.http import StaticPathConfig
 
 from .api import PCloudAPI
 from .auth import create_auth
@@ -41,11 +42,15 @@ def _ensure_frontend_module(hass: HomeAssistant) -> None:
 
     source_path = Path(__file__).parent / "frontend" / "icon_patch.js"
 
-    try:
-        hass.http.register_static_path(ICON_MODULE_URL, str(source_path), cache=False)
-    except ValueError:
-        # Path already registered by another config entry
-        pass
+    hass.http.async_register_static_paths(
+        [
+            StaticPathConfig(
+                ICON_MODULE_URL,
+                str(source_path),
+                cache=False,
+            )
+        ]
+    )
 
     frontend.add_extra_module_url(hass, ICON_MODULE_URL)
     domain_data[ICON_MODULE_NAME] = True
