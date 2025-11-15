@@ -1,0 +1,49 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "pCloud Backup Konfiguration",
+        "description": "Gib deine pCloud-Zugangsdaten ein und wähle dein Datacenter.",
+        "data": {
+          "region": "Region",
+          "username": "E-Mail",
+          "password": "Passwort",
+          "backup_folder": "Backup-Pfad"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Verbindung zu pCloud fehlgeschlagen. Bitte Zugangsdaten prüfen und erneut versuchen.",
+      "invalid_auth": "Authentifizierung fehlgeschlagen. Bitte E-Mail und Passwort prüfen.",
+      "unknown": "Unerwarteter Fehler: {error}"
+    },
+    "abort": {
+      "already_configured": "Dieses pCloud-Konto ist bereits eingerichtet."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "pCloud Backup Optionen",
+        "description": "Konfiguriere den Backup-Pfad in pCloud.",
+        "data": {
+          "backup_folder": "Backup-Pfad"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "remote_backup_count": {
+        "name": "Anzahl Remote Backups"
+      },
+      "last_remote_backup": {
+        "name": "Letztes Remote Backup"
+      },
+      "last_sync_status": {
+        "name": "Letzter Sync-Status"
+      }
+    }
+  }
+}
+
