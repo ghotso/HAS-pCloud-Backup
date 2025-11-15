@@ -30,20 +30,20 @@ _LOGGER = logging.getLogger(__name__)
 SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
     SensorEntityDescription(
         key="remote_backup_count",
-        name="Remote Backup Count",
+        translation_key="remote_backup_count",
         icon="mdi:cloud",
         native_unit_of_measurement="backups",
         state_class=SensorStateClass.TOTAL,
     ),
     SensorEntityDescription(
         key="last_remote_backup",
-        name="Last Remote Backup",
+        translation_key="last_remote_backup",
         icon="mdi:clock-outline",
         device_class="timestamp",
     ),
     SensorEntityDescription(
         key="last_sync_status",
-        name="Last Sync Status",
+        translation_key="last_sync_status",
         icon="mdi:sync",
     ),
 )
@@ -157,6 +157,8 @@ class PCloudBackupCoordinator(DataUpdateCoordinator):
 class PCloudBackupSensor(CoordinatorEntity, SensorEntity):
     """Representation of a pCloud Backup sensor."""
 
+    _attr_has_entity_name = True
+
     def __init__(
         self,
         coordinator: PCloudBackupCoordinator,
@@ -167,7 +169,6 @@ class PCloudBackupSensor(CoordinatorEntity, SensorEntity):
         super().__init__(coordinator)
         self.entity_description = description
         self._attr_unique_id = f"{entry.entry_id}_{description.key}"
-        self._attr_name = f"pCloud Backup {description.name}"
 
     @property
     def native_value(self) -> StateType:
