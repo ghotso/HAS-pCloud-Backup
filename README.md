@@ -4,6 +4,7 @@
 [![License][license-shield]](LICENSE)
 [![hacs][hacsbadge]][hacs]
 [![Downloads][hacsdownloads-shield]][hacsdownloads]
+[![Downloads Total][totaldownloads-shield]][releases]
 
 
 A native Home Assistant Backup Agent integration for pCloud, enabling users to store, restore, and manage encrypted Home Assistant backups directly in their pCloud account.
@@ -17,6 +18,16 @@ A native Home Assistant Backup Agent integration for pCloud, enabling users to s
 - ✅ **Monitoring Sensors** - Track backup count, last backup time, and sync status
 - ✅ **Encrypted Backups** - Uses Home Assistant's built-in backup encryption
 - ✅ **Native Backup Agent** - Fully integrated with Home Assistant's backup UI
+
+> **⚠️ Important: Two-Factor Authentication (2FA)**
+> 
+> **Currently, this integration does not support pCloud accounts with 2FA enabled.** The digest authentication method used by this integration cannot complete the second factor challenge required by pCloud's 2FA system.
+> 
+> **Workaround:** If you have 2FA enabled on your pCloud account, you'll need to either:
+> - Temporarily disable 2FA for your account, or
+> - Use a separate pCloud account without 2FA for backups
+> 
+> **Future Support:** OAuth2 authentication (which supports 2FA) is planned. We've contacted pCloud support to request OAuth2 client credentials (since it is currently not possible to register them through their self-service portal). Once available, 2FA support will be added in a future release.
 
 ## Installation
 
@@ -101,6 +112,8 @@ All backups (both local and pCloud) are displayed in **Settings** → **System**
 
 This integration uses **digest authentication** as documented in the [pCloud API documentation](https://docs.pcloud.com/methods/intro/authentication.html).
 
+**⚠️ Note:** Accounts with two-factor authentication (2FA) enabled are not currently supported. See the [Important notice](#-important-two-factor-authentication-2fa) above for details.
+
 ### Security
 
 Digest authentication provides secure authentication without sending plain-text passwords:
@@ -118,6 +131,7 @@ The integration follows pCloud's recommended authentication flow and ensures you
 
 - **Invalid credentials**: Verify your email and password are correct
 - **Authentication failed**: Check that your pCloud account is active and accessible
+- **2FA enabled**: Accounts with two-factor authentication are not currently supported (see [Important notice](#-important-two-factor-authentication-2fa) above)
 - **Region mismatch**: Ensure you've selected the correct region (EU vs US) for your account
 
 ### Connection Issues
@@ -184,7 +198,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 [hacsbadge]: https://img.shields.io/badge/HACS-Default-blue?style=for-the-badge
 [hacsdownloads-shield]: https://shields.ghotso.dev/github/downloads/ghotso/HAS-pCloud-Backup/latest/pcloud_backup.zip?displayAssetName=false&style=for-the-badge
 [hacsdownloads]: https://github.com/ghotso/HAS-pCloud-Backup/releases/latest
-(https://shields.ghotso.dev/github/downloads/ghotso/HAS-pCloud-Backup/latest/pcloud_backup.zip?displayAssetName=false&style=for-the-badge)
+[totaldownloads-shield]: https://shields.ghotso.dev/github/downloads/ghotso/HAS-pCloud-Backup/total?style=for-the-badge&label=Downloads%20Total
 
 
 last updated: 13.11.2025
