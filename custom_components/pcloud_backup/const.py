@@ -15,6 +15,12 @@ API_BASE_EU = "https://eapi.pcloud.com"
 OAUTH2_AUTHORIZE = "https://my.pcloud.com/oauth2/authorize"
 OAUTH2_TOKEN = "https://api.pcloud.com/oauth2_token"
 
+# OAuth2 Client Credentials
+# These should be set when you register your app with pCloud
+# TODO: Replace with your actual client_id and client_secret from pCloud
+OAUTH2_CLIENT_ID = "k6BcOqqGPmS"  # Set your client_id here
+OAUTH2_CLIENT_SECRET = "9CXagIbK88kcoTRHvuiovXNH2rgV"  # Set your client_secret here
+
 # Default folder for backups
 DEFAULT_BACKUP_FOLDER = "/HomeAssistant/Backups"
 

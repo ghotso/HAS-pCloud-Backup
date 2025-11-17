@@ -13,9 +13,7 @@ from homeassistant.components.http import StaticPathConfig
 from .api import PCloudAPI
 from .auth import create_auth
 from .const import (
-    CONF_PASSWORD,
     CONF_REGION,
-    CONF_USERNAME,
     DATA_BACKUP_AGENT_LISTENERS,
     DOMAIN,
     PLATFORMS,
@@ -34,7 +32,7 @@ def _notify_backup_agent_listeners(hass: HomeAssistant) -> None:
         listener()
 
 
-def _ensure_frontend_module(hass: HomeAssistant) -> None:
+async def _ensure_frontend_module(hass: HomeAssistant) -> None:
     """Expose the frontend helper module exactly once."""
     domain_data = hass.data.setdefault(DOMAIN, {})
     if domain_data.get(ICON_MODULE_NAME):
@@ -42,7 +40,7 @@ def _ensure_frontend_module(hass: HomeAssistant) -> None:
 
     source_path = Path(__file__).parent / "frontend" / "icon_patch.js"
 
-    hass.http.async_register_static_paths(
+    await hass.http.async_register_static_paths(
         [
             StaticPathConfig(
                 ICON_MODULE_URL,
@@ -56,6 +54,22 @@ def _ensure_frontend_module(hass: HomeAssistant) -> None:
     domain_data[ICON_MODULE_NAME] = True
 
 
+async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
+    """Migrate old config entries to new format."""
+    if config_entry.version == 1:
+        # Old entries used digest auth (username/password)
+        # These need to be removed and re-added with OAuth2
+        _LOGGER.warning(
+            "Config entry %s uses old digest authentication. "
+            "Please remove and re-add the integration to use OAuth2.",
+            config_entry.title
+        )
+        # Return False to indicate migration failed (user needs to re-add)
+        return False
+    
+    return True
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up pCloud Backup from a config entry."""
     hass.data.setdefault(DOMAIN, {})
@@ -63,22 +77,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Create auth instance
     region = entry.data.get(CONF_REGION, "us")
 
-    # Support both OAuth2 (future) and digest auth (current)
-    if "token" in entry.data:
-        # OAuth2 authentication
-        auth = create_auth(
-            hass=hass,
-            region=region,
-            access_token=entry.data["token"]["access_token"],
-        )
-    else:
-        # Digest authentication (current)
-        auth = create_auth(
-            hass=hass,
-            region=region,
-            username=entry.data[CONF_USERNAME],
-            password=entry.data[CONF_PASSWORD],
-        )
+    # OAuth2 authentication
+    if "token" not in entry.data:
+        _LOGGER.error("Config entry missing OAuth2 token. Please re-add the integration.")
+        return False
+    
+    auth = create_auth(
+        hass=hass,
+        region=region,
+        access_token=entry.data["token"]["access_token"],
+    )
 
     # Create API instance
     api = PCloudAPI(hass=hass, region=region, auth=auth)
@@ -94,7 +102,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN][entry.entry_id] = api
     entry.runtime_data = api
 
-    _ensure_frontend_module(hass)
+    await _ensure_frontend_module(hass)
 
     # Notify backup manager listeners that agents may have changed
     _notify_backup_agent_listeners(hass)

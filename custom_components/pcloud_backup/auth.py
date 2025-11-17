@@ -14,8 +14,7 @@ from .const import API_BASE_EU, API_BASE_US
 
 _LOGGER = logging.getLogger(__name__)
 
-# Enable OAuth2 when pCloud fixes their developer portal
-USE_OAUTH2 = False
+# OAuth2 is now the default authentication method
 
 # Token expiration buffer (refresh 5 minutes before expiration)
 TOKEN_EXPIRY_BUFFER = timedelta(minutes=5)
@@ -309,26 +308,19 @@ class PCloudOAuth2Auth(PCloudAuth):
 def create_auth(
     hass: Any,
     region: str,
-    username: str | None = None,
-    password: str | None = None,
-    access_token: str | None = None,
+    access_token: str,
 ) -> PCloudAuth:
-    """Create appropriate authentication instance.
+    """Create OAuth2 authentication instance.
 
     Args:
         hass: Home Assistant instance
         region: pCloud region (us/eu)
-        username: Username for digest auth
-        password: Password for digest auth
         access_token: OAuth2 access token
 
     Returns:
         PCloudAuth instance
     """
-    if USE_OAUTH2 and access_token:
-        return PCloudOAuth2Auth(hass, region, access_token)
-    elif username and password:
-        return PCloudDigestAuth(hass, region, username, password)
-    else:
-        raise ValueError("Either username/password or access_token must be provided")
+    if not access_token:
+        raise ValueError("access_token must be provided")
+    return PCloudOAuth2Auth(hass, region, access_token)
 
