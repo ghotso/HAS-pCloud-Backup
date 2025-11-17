@@ -32,7 +32,7 @@ def _notify_backup_agent_listeners(hass: HomeAssistant) -> None:
         listener()
 
 
-def _ensure_frontend_module(hass: HomeAssistant) -> None:
+async def _ensure_frontend_module(hass: HomeAssistant) -> None:
     """Expose the frontend helper module exactly once."""
     domain_data = hass.data.setdefault(DOMAIN, {})
     if domain_data.get(ICON_MODULE_NAME):
@@ -40,7 +40,7 @@ def _ensure_frontend_module(hass: HomeAssistant) -> None:
 
     source_path = Path(__file__).parent / "frontend" / "icon_patch.js"
 
-    hass.http.async_register_static_paths(
+    await hass.http.async_register_static_paths(
         [
             StaticPathConfig(
                 ICON_MODULE_URL,
@@ -102,7 +102,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN][entry.entry_id] = api
     entry.runtime_data = api
 
-    _ensure_frontend_module(hass)
+    await _ensure_frontend_module(hass)
 
     # Notify backup manager listeners that agents may have changed
     _notify_backup_agent_listeners(hass)
