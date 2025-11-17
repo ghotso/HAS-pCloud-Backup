@@ -26,14 +26,15 @@ A native Home Assistant Backup Agent integration for pCloud, enabling users to s
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=ghotso&repository=HAS-pCloud-Backup)
 
-1. Open HACS in Home Assistant
-2. Go to **Integrations**
-3. Click **Explore & Download Repositories**
-4. Search for "pCloud Backup"
-5. Click **Download**
-6. Restart Home Assistant
-7. Go to **Settings** → **Devices & Services** → **Add Integration**
-8. Search for "pCloud Backup"
+1. Open **HACS** in Home Assistant
+2. Go to **Integrations** tab
+3. Click **Explore & Download Repositories** (bottom right)
+4. Search for **"pCloud Backup"**
+5. Click on the integration and then click **Download**
+6. **Restart Home Assistant** (required after installation)
+7. After restart, go to **Settings** → **Devices & Services**
+8. Click **Add Integration** (bottom right)
+9. Search for **"pCloud Backup"** and select it
 
 ### Manual Installation
 
@@ -42,26 +43,64 @@ A native Home Assistant Backup Agent integration for pCloud, enabling users to s
    ```
    config/custom_components/pcloud_backup/
    ```
-3. Restart Home Assistant
-4. Go to **Settings** → **Devices & Services** → **Add Integration**
-5. Search for "pCloud Backup"
+3. **Restart Home Assistant** (required after installation)
+4. After restart, go to **Settings** → **Devices & Services**
+5. Click **Add Integration** (bottom right)
+6. Search for **"pCloud Backup"** and select it
 
 ## Configuration
 
-### Initial Setup
+### Step-by-Step Setup Guide
 
-1. Add the integration via the Home Assistant UI
-2. You'll be redirected to pCloud's OAuth2 authorization page
-3. Log in to your pCloud account and authorize the integration
-4. The integration will automatically detect your region (EU or US) from the OAuth callback
-5. The integration will register as a backup agent
+The integration uses OAuth2 authentication for secure access to your pCloud account. The setup process is straightforward:
 
-**Note:** The integration uses Home Assistant's OAuth2 redirect system. If you're setting up your own pCloud OAuth2 app, use the redirect URI: `https://my.home-assistant.io/redirect/oauth` (for Home Assistant Cloud users) or your local Home Assistant instance URL with `/auth/external/callback` path.
+![OAuth2 Authentication Flow](docs/screenshots/auth_flow.gif)
 
-### Storage Path
+#### Step 1: Start the Integration Setup
 
-During the initial setup you pick the folder inside pCloud that will hold your backups (default: `/HomeAssistant/Backups`).  
-Currently the path can only be set during onboarding—if you need to change it later, remove the integration and add it again.
+1. After installation, go to **Settings** → **Devices & Services**
+2. Click **Add Integration**
+3. Search for **"pCloud Backup"** and select it
+
+#### Step 2: OAuth2 Authentication
+
+1. You'll be redirected to **pCloud's OAuth2 authorization page** in your browser
+2. **Log in** to your pCloud account (works with 2FA-enabled accounts)
+3. Review the permissions and click **Allow** or **Authorize** to grant access
+4. You'll be redirected back to the cloud Home Assistant redirect page
+5. If not already entered, enter the address to your Homeassistant installation and click on link account.
+
+#### Step 3: Configure Storage Path
+
+1. You'll be prompted to enter the **pCloud folder path** where backups will be stored
+2. Default path: `/HomeAssistant/Backups`
+3. You can customize this path (e.g., `/Backups/HomeAssistant` or `/MyBackups`)
+4. Click **Submit**
+
+> **Note:** The storage path can only be set during initial setup. To change it later, you'll need to remove and re-add the integration.
+
+#### Step 4: Complete Setup
+
+1. The integration will automatically:
+   - Detect your pCloud region (EU or US datacenter)
+   - Test the connection to pCloud
+   - Register as a backup agent in Home Assistant
+2. You'll see a success message confirming the integration is set up
+3. The integration is now ready to use!
+
+### What Happens Next?
+
+Once configured, the integration will:
+- ✅ Appear in **Settings** → **System** → **Backups** as a backup destination
+- ✅ Automatically upload all Home Assistant backups to pCloud
+- ✅ Display pCloud backups alongside local backups in the backup manager
+- ✅ Provide sensors for monitoring backup status
+
+### Technical Details
+
+**OAuth2 Redirect URI:** The integration uses Home Assistant's OAuth2 redirect system. For Home Assistant Cloud users, the redirect URI is `https://my.home-assistant.io/redirect/oauth`. For local instances, Home Assistant automatically handles the redirect URI.
+
+**Region Detection:** The integration automatically detects whether your pCloud account uses the EU or US datacenter based on the OAuth2 callback response. No manual configuration needed!
 
 ## Sensors
 

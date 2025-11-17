@@ -10,11 +10,19 @@
           "password": "Passwort",
           "backup_folder": "Backup-Pfad"
         }
+      },
+      "folder_path": {
+        "title": "Backup-Ordner konfigurieren",
+        "description": "Gib den Ordnerpfad in pCloud ein, in dem Backups gespeichert werden sollen. Der Ordner wird erstellt, falls er nicht existiert.",
+        "data": {
+          "backup_folder": "Backup-Pfad"
+        }
       }
     },
     "error": {
       "cannot_connect": "Verbindung zu pCloud fehlgeschlagen. Bitte Zugangsdaten prüfen und erneut versuchen.",
       "invalid_auth": "Authentifizierung fehlgeschlagen. Bitte E-Mail und Passwort prüfen.",
+      "invalid_folder_path": "Ungültiger Ordnerpfad. Bitte den Pfad prüfen und erneut versuchen. Der Ordner wird erstellt, falls er nicht existiert.",
       "unknown": "Unerwarteter Fehler: {error}"
     },
     "abort": {

@@ -369,50 +369,88 @@ class PCloudConfigFlow(
 
     async def async_oauth_create_entry(self, data: dict[str, Any]) -> FlowResult:
         """Create an entry for the flow."""
-        # Get additional OAuth data stored during token exchange
+        # Store OAuth data for use in the folder path step
         oauth_data = getattr(self.flow_impl, "_oauth_data", {})
-        region = oauth_data.get("region", "us")
-        hostname = oauth_data.get("hostname")
-        locationid = oauth_data.get("locationid")
+        self._oauth_region = oauth_data.get("region", "us")
+        self._oauth_hostname = oauth_data.get("hostname")
+        self._oauth_locationid = oauth_data.get("locationid")
+        self._oauth_data_dict = data
         
-        # Extract token from data (Home Assistant puts it in data["token"])
-        access_token = data["token"]["access_token"]
-
-        # Test connection and get user info
-        try:
-            auth = create_auth(
-                hass=self.hass,
-                region=region,
-                access_token=access_token,
-            )
-            api = PCloudAPI(hass=self.hass, region=region, auth=auth)
+        # Go to folder path configuration step
+        return await self.async_step_folder_path()
+    
+    async def async_step_folder_path(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Configure the backup folder path."""
+        errors = {}
+        
+        if user_input is not None:
+            backup_folder = user_input.get(CONF_BACKUP_FOLDER, DEFAULT_BACKUP_FOLDER)
             
-            # Get user info
-            user_info = await api.async_test_connection()
-            await api.async_close()
-
-            # Use email as unique ID
-            email = user_info.get("email", "")
-            if email:
-                await self.async_set_unique_id(email)
-                self._abort_if_unique_id_configured()
-
-            return self.async_create_entry(
-                title=f"pCloud Backup ({region.upper()})",
-                data={
-                    **data,
-                    CONF_REGION: region,
-                    "hostname": hostname,
-                    "locationid": locationid,
-                },
-                options={
-                    CONF_BACKUP_FOLDER: DEFAULT_BACKUP_FOLDER,
-                },
-            )
-        except PCloudAPIError as err:
-            _LOGGER.error("Connection test failed: %s", err)
-            return self.async_abort(reason="cannot_connect")
-        except Exception as err:
-            _LOGGER.exception("Unexpected error during OAuth setup")
-            return self.async_abort(reason="unknown")
+            # Test connection and validate folder path
+            try:
+                region = getattr(self, "_oauth_region", "us")
+                data = getattr(self, "_oauth_data_dict", {})
+                access_token = data["token"]["access_token"]
+                
+                auth = create_auth(
+                    hass=self.hass,
+                    region=region,
+                    access_token=access_token,
+                )
+                api = PCloudAPI(hass=self.hass, region=region, auth=auth)
+                
+                # Test connection
+                user_info = await api.async_test_connection()
+                
+                # Validate folder path by trying to get folder ID
+                try:
+                    await api.async_get_folder_id(backup_folder)
+                except Exception as folder_err:
+                    errors["base"] = "invalid_folder_path"
+                    _LOGGER.error("Invalid folder path: %s", folder_err)
+                    await api.async_close()
+                    # Continue to show form with error
+                else:
+                    await api.async_close()
+                    
+                    # Use email as unique ID
+                    email = user_info.get("email", "")
+                    if email:
+                        await self.async_set_unique_id(email)
+                        self._abort_if_unique_id_configured()
+                    
+                    # Create entry with folder path
+                    return self.async_create_entry(
+                        title=f"pCloud Backup ({region.upper()})",
+                        data={
+                            **data,
+                            CONF_REGION: region,
+                            "hostname": getattr(self, "_oauth_hostname"),
+                            "locationid": getattr(self, "_oauth_locationid"),
+                        },
+                        options={
+                            CONF_BACKUP_FOLDER: backup_folder,
+                        },
+                    )
+            except PCloudAPIError as err:
+                _LOGGER.error("Connection test failed: %s", err)
+                errors["base"] = "cannot_connect"
+            except Exception as err:
+                _LOGGER.exception("Unexpected error during setup")
+                errors["base"] = "unknown"
+        
+        return self.async_show_form(
+            step_id="folder_path",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_BACKUP_FOLDER,
+                        default=DEFAULT_BACKUP_FOLDER,
+                    ): str,
+                }
+            ),
+            errors=errors,
+        )
 

@@ -10,11 +10,19 @@
           "password": "Password",
           "backup_folder": "Backup Folder Path"
         }
+      },
+      "folder_path": {
+        "title": "Configure Backup Folder",
+        "description": "Enter the folder path in pCloud where backups will be stored. The folder will be created if it doesn't exist.",
+        "data": {
+          "backup_folder": "Backup Folder Path"
+        }
       }
     },
     "error": {
       "cannot_connect": "Failed to connect to pCloud. Please check your credentials and try again.",
       "invalid_auth": "Authentication failed. Please check your email and password.",
+      "invalid_folder_path": "Invalid folder path. Please check the path and try again. The folder will be created if it doesn't exist.",
       "unknown": "Unexpected error occurred: {error}"
     },
     "abort": {
