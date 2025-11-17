@@ -11,23 +11,14 @@ A native Home Assistant Backup Agent integration for pCloud, enabling users to s
 
 ## Features
 
-- ✅ **Digest Authentication** - Secure authentication using pCloud's digest authentication method
+- ✅ **OAuth2 Authentication** - Secure OAuth2 authentication with full 2FA support
 - ✅ **Region Support** - Choose between EU or US pCloud datacenters
 - ✅ **Automatic Uploads** - Integrates seamlessly with Home Assistant's backup system
 - ✅ **Backup Management** - List, download, and delete backups from pCloud directly in Home Assistant
 - ✅ **Monitoring Sensors** - Track backup count, last backup time, and sync status
 - ✅ **Encrypted Backups** - Uses Home Assistant's built-in backup encryption
 - ✅ **Native Backup Agent** - Fully integrated with Home Assistant's backup UI
-
-> **⚠️ Important: Two-Factor Authentication (2FA)**
-> 
-> **Currently, this integration does not support pCloud accounts with 2FA enabled.** The digest authentication method used by this integration cannot complete the second factor challenge required by pCloud's 2FA system.
-> 
-> **Workaround:** If you have 2FA enabled on your pCloud account, you'll need to either:
-> - Temporarily disable 2FA for your account, or
-> - Use a separate pCloud account without 2FA for backups
-> 
-> **Future Support:** OAuth2 authentication (which supports 2FA) is planned. We've contacted pCloud support to request OAuth2 client credentials (since it is currently not possible to register them through their self-service portal). Once available, 2FA support will be added in a future release.
+- ✅ **2FA Compatible** - Works seamlessly with pCloud accounts that have two-factor authentication enabled
 
 ## Installation
 
@@ -60,11 +51,12 @@ A native Home Assistant Backup Agent integration for pCloud, enabling users to s
 ### Initial Setup
 
 1. Add the integration via the Home Assistant UI
-2. Enter your pCloud credentials:
-   - **Email**: Your pCloud account email
-   - **Password**: Your pCloud account password
-   - **Region**: Select EU or US based on your account's datacenter
-3. The integration will test the connection and automatically register as a backup agent
+2. You'll be redirected to pCloud's OAuth2 authorization page
+3. Log in to your pCloud account and authorize the integration
+4. The integration will automatically detect your region (EU or US) from the OAuth callback
+5. The integration will register as a backup agent
+
+**Note:** The integration uses Home Assistant's OAuth2 redirect system. If you're setting up your own pCloud OAuth2 app, use the redirect URI: `https://my.home-assistant.io/redirect/oauth` (for Home Assistant Cloud users) or your local Home Assistant instance URL with `/auth/external/callback` path.
 
 ### Storage Path
 
@@ -105,34 +97,33 @@ All backups (both local and pCloud) are displayed in **Settings** → **System**
 ## Requirements
 
 - Home Assistant 2025.1 or later
-- pCloud account with email and password
+- pCloud account (works with 2FA-enabled accounts)
 - Active internet connection for backup synchronization
 
 ## Authentication
 
-This integration uses **digest authentication** as documented in the [pCloud API documentation](https://docs.pcloud.com/methods/intro/authentication.html).
-
-**⚠️ Note:** Accounts with two-factor authentication (2FA) enabled are not currently supported. See the [Important notice](#-important-two-factor-authentication-2fa) above for details.
+This integration uses **OAuth2 authentication** as documented in the [pCloud OAuth2 documentation](https://docs.pcloud.com/methods/oauth_2.0/authorize.html).
 
 ### Security
 
-Digest authentication provides secure authentication without sending plain-text passwords:
+OAuth2 provides industry-standard secure authentication:
 
-- **SHA1 Hashing**: Passwords are hashed using SHA1 before transmission
+- **OAuth2 Flow**: Uses the authorization code flow for secure token exchange
 - **HTTPS Encryption**: All API communication uses HTTPS (SSL/TLS)
-- **Secure Storage**: Credentials are stored securely in Home Assistant's credential store
-- **Token Management**: Authentication tokens are automatically refreshed when needed
+- **Secure Token Storage**: Access tokens are stored securely in Home Assistant's credential store
+- **2FA Support**: Fully compatible with pCloud accounts that have two-factor authentication enabled
+- **No Password Storage**: Your pCloud password is never stored or transmitted to Home Assistant
 
-The integration follows pCloud's recommended authentication flow and ensures your credentials remain secure.
+The integration follows pCloud's OAuth2 flow and ensures your credentials remain secure.
 
 ## Troubleshooting
 
 ### Authentication Issues
 
-- **Invalid credentials**: Verify your email and password are correct
+- **OAuth2 authorization failed**: Make sure you complete the authorization flow in your browser
 - **Authentication failed**: Check that your pCloud account is active and accessible
-- **2FA enabled**: Accounts with two-factor authentication are not currently supported (see [Important notice](#-important-two-factor-authentication-2fa) above)
-- **Region mismatch**: Ensure you've selected the correct region (EU vs US) for your account
+- **Region mismatch**: The integration automatically detects your region, but you can verify it matches your account (EU vs US)
+- **Token expired**: If you encounter authentication errors, try removing and re-adding the integration
 
 ### Connection Issues
 

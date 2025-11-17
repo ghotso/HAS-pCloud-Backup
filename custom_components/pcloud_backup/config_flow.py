@@ -9,16 +9,19 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, OptionsFlow
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
+from homeassistant.helpers import config_entry_oauth2_flow
 
 from .api import PCloudAPI, PCloudAPIError
 from .auth import create_auth
 from .const import (
     CONF_BACKUP_FOLDER,
-    CONF_PASSWORD,
     CONF_REGION,
-    CONF_USERNAME,
     DEFAULT_BACKUP_FOLDER,
     DOMAIN,
+    OAUTH2_AUTHORIZE,
+    OAUTH2_CLIENT_ID,
+    OAUTH2_CLIENT_SECRET,
+    OAUTH2_TOKEN,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -58,91 +61,147 @@ def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
     return PCloudOptionsFlowHandler(config_entry)
 
 
-class PCloudConfigFlow(ConfigFlow, domain=DOMAIN):
+class PCloudOAuth2Implementation(config_entry_oauth2_flow.LocalOAuth2Implementation):
+    """OAuth2 implementation for pCloud."""
+
+    def __init__(self, hass: Any) -> None:
+        """Initialize pCloud OAuth2 implementation."""
+        super().__init__(
+            hass,
+            DOMAIN,
+            OAUTH2_CLIENT_ID,
+            OAUTH2_CLIENT_SECRET,
+            OAUTH2_AUTHORIZE,
+            OAUTH2_TOKEN,
+        )
+
+    async def async_resolve_external_data(self, external_data: dict[str, Any]) -> dict[str, Any]:
+        """Resolve external data to tokens."""
+        # pCloud returns locationid and hostname in the redirect
+        # We need to extract these and store them
+        code = external_data.get("code")
+        locationid = external_data.get("locationid")
+        hostname = external_data.get("hostname")
+        
+        # Determine region from locationid (1=US, 2=EU)
+        region = "eu" if locationid == 2 else "us"
+        
+        # Exchange code for token
+        from homeassistant.helpers.aiohttp_client import async_get_clientsession
+        session = async_get_clientsession(self.hass)
+        
+        # Get redirect URI from the implementation
+        redirect_uri = self.redirect_uri
+        
+        data = {
+            "client_id": self.client_id,
+            "client_secret": self.client_secret,
+            "code": code,
+            "grant_type": "authorization_code",
+            "redirect_uri": redirect_uri,
+        }
+        
+        async with session.post(OAUTH2_TOKEN, data=data) as response:
+            result = await response.json()
+            
+            if result.get("result") != 0:
+                error_msg = result.get("error", "Unknown error")
+                raise ValueError(f"Token exchange failed: {error_msg}")
+            
+            access_token = result.get("access_token")
+            if not access_token:
+                raise ValueError("No access token received")
+            
+            return {
+                "token": {
+                    "access_token": access_token,
+                    "token_type": "bearer",
+                },
+                "region": region,
+                "hostname": hostname,
+                "locationid": locationid,
+            }
+
+
+
+
+class PCloudConfigFlow(
+    config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain=DOMAIN
+):
     """Handle a config flow for pCloud Backup."""
 
-    VERSION = 1
+    DOMAIN = DOMAIN
+    VERSION = 2
     OPTIONS_FLOW = async_get_options_flow
+
+    @property
+    def logger(self) -> logging.Logger:
+        """Return logger."""
+        return _LOGGER
+
+    @property
+    def extra_authorize_data(self) -> dict[str, Any]:
+        """Extra data that needs to be appended to the authorize url."""
+        return {"response_type": "code"}
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Handle the initial step."""
-        errors: dict[str, str] = {}
+        """Handle the initial step - redirect to OAuth2."""
+        # Check if OAuth2 credentials are configured
+        if not OAUTH2_CLIENT_ID or not OAUTH2_CLIENT_SECRET:
+            return self.async_abort(
+                reason="oauth2_not_configured",
+                description_placeholders={
+                    "error": "OAuth2 client credentials not configured. Please set OAUTH2_CLIENT_ID and OAUTH2_CLIENT_SECRET in const.py"
+                },
+            )
 
-        if user_input is not None:
-            # Validate input
-            region = user_input[CONF_REGION]
-            username = user_input[CONF_USERNAME]
-            password = user_input[CONF_PASSWORD]
+        # Set up OAuth2 implementation
+        self.flow_impl = PCloudOAuth2Implementation(self.hass)
+        
+        # Use the OAuth2 flow
+        return await self.async_step_pick_implementation(user_input)
 
-            # Test connection
-            try:
-                auth = create_auth(
-                    hass=self.hass,
-                    region=region,
-                    username=username,
-                    password=password,
-                )
-                api = PCloudAPI(hass=self.hass, region=region, auth=auth)
-                await api.async_test_connection()
-                await api.async_close()
+    async def async_oauth_create_entry(self, data: dict[str, Any]) -> FlowResult:
+        """Create an entry for the flow."""
+        # Extract region from OAuth callback (locationid: 1=US, 2=EU)
+        region = data.get("region", "us")
+        access_token = data["token"]["access_token"]
 
-                # Check if already configured
-                await self.async_set_unique_id(username)
+        # Test connection and get user info
+        try:
+            auth = create_auth(
+                hass=self.hass,
+                region=region,
+                access_token=access_token,
+            )
+            api = PCloudAPI(hass=self.hass, region=region, auth=auth)
+            
+            # Get user info
+            user_info = await api.async_test_connection()
+            await api.async_close()
+
+            # Use email as unique ID
+            email = user_info.get("email", "")
+            if email:
+                await self.async_set_unique_id(email)
                 self._abort_if_unique_id_configured()
 
-                # Get backup folder from user input or use default
-                backup_folder = user_input.get(CONF_BACKUP_FOLDER, DEFAULT_BACKUP_FOLDER)
-
-                # Create entry (password stored in data - HA encrypts it automatically)
-                return self.async_create_entry(
-                    title=f"pCloud Backup ({region.upper()})",
-                    data={
-                        CONF_REGION: region,
-                        CONF_USERNAME: username,
-                        CONF_PASSWORD: password,
-                    },
-                    options={
-                        CONF_BACKUP_FOLDER: backup_folder,
-                    },
-                )
-
-            except PCloudAPIError as err:
-                _LOGGER.error("Connection test failed: %s", err)
-                errors["base"] = "cannot_connect"
-            except ValueError as err:
-                _LOGGER.error("Authentication failed: %s", err)
-                errors["base"] = "invalid_auth"
-            except Exception as err:
-                _LOGGER.exception("Unexpected error during connection test")
-                errors["base"] = "unknown"
-
-        return self.async_show_form(
-            step_id="user",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_REGION, default="us"): vol.In(
-                        {
-                            "us": "United States (US)",
-                            "eu": "Europe (EU)",
-                        }
-                    ),
-                    vol.Required(CONF_USERNAME): str,
-                    vol.Required(CONF_PASSWORD): str,  # Note: Home Assistant will render as password field
-                    vol.Required(
-                        CONF_BACKUP_FOLDER,
-                        default=DEFAULT_BACKUP_FOLDER,
-                    ): str,
-                }
-            ),
-            errors=errors,
-        )
-
-
-# OAuth2 Config Flow (for future use when pCloud fixes their portal)
-# To switch back to OAuth2:
-# 1. Set USE_OAUTH2 = True in auth.py
-# 2. See AUTH_MIGRATION.md for detailed migration instructions
-# 3. The OAuth2 flow handler code can be found in git history if needed
+            return self.async_create_entry(
+                title=f"pCloud Backup ({region.upper()})",
+                data={
+                    **data,
+                    CONF_REGION: region,
+                },
+                options={
+                    CONF_BACKUP_FOLDER: DEFAULT_BACKUP_FOLDER,
+                },
+            )
+        except PCloudAPIError as err:
+            _LOGGER.error("Connection test failed: %s", err)
+            return self.async_abort(reason="cannot_connect")
+        except Exception as err:
+            _LOGGER.exception("Unexpected error during OAuth setup")
+            return self.async_abort(reason="unknown")
 

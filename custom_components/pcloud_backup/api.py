@@ -58,18 +58,28 @@ class PCloudAPI:
         session = await self._get_session()
         url = f"{self._base_url}{endpoint}"
 
-        # Get auth token and add to params
+        # Determine if using OAuth2 (Bearer token) or digest auth (auth parameter)
+        # OAuth2 auth has _access_token but no username, digest has username
+        is_oauth2 = hasattr(self.auth, "_access_token") and not hasattr(self.auth, "username")
+
         request_params = params or {}
-        auth_token = await self.auth.get_auth_token()
-        request_params["auth"] = auth_token
+        headers = kwargs.pop("headers", {})
         
-        # Update inactive expiration (token usage extends inactive expiration)
-        if hasattr(self.auth, "update_inactive_expiration"):
-            self.auth.update_inactive_expiration()
+        auth_token = await self.auth.get_auth_token()
+        
+        if is_oauth2:
+            # OAuth2: Use Bearer token in Authorization header
+            headers["Authorization"] = f"Bearer {auth_token}"
+        else:
+            # Digest auth: Use auth parameter
+            request_params["auth"] = auth_token
+            # Update inactive expiration (token usage extends inactive expiration)
+            if hasattr(self.auth, "update_inactive_expiration"):
+                self.auth.update_inactive_expiration()
 
         try:
             if method.upper() == "GET":
-                async with session.get(url, params=request_params, **kwargs) as response:
+                async with session.get(url, params=request_params, headers=headers, **kwargs) as response:
                     result = await response.json()
             elif method.upper() == "POST":
                 if files:
@@ -84,12 +94,12 @@ class PCloudAPI:
                             )
                         else:
                             form_data.add_field(key, value)
-                    async with session.post(url, data=form_data, **kwargs) as response:
+                    async with session.post(url, data=form_data, headers=headers, **kwargs) as response:
                         result = await response.json()
                 else:
                     # Regular POST
                     async with session.post(
-                        url, params=request_params, data=data, **kwargs
+                        url, params=request_params, data=data, headers=headers, **kwargs
                     ) as response:
                         result = await response.json()
             else:
@@ -107,10 +117,13 @@ class PCloudAPI:
                         await self.auth.refresh_token_if_needed()
                         # Retry request with new token
                         auth_token = await self.auth.get_auth_token()
-                        request_params["auth"] = auth_token
+                        if is_oauth2:
+                            headers["Authorization"] = f"Bearer {auth_token}"
+                        else:
+                            request_params["auth"] = auth_token
                         # Retry the request
                         if method.upper() == "GET":
-                            async with session.get(url, params=request_params, **kwargs) as retry_response:
+                            async with session.get(url, params=request_params, headers=headers, **kwargs) as retry_response:
                                 result = await retry_response.json()
                         elif method.upper() == "POST":
                             if files:
@@ -124,11 +137,11 @@ class PCloudAPI:
                                         )
                                     else:
                                         form_data.add_field(key, value)
-                                async with session.post(url, data=form_data, **kwargs) as retry_response:
+                                async with session.post(url, data=form_data, headers=headers, **kwargs) as retry_response:
                                     result = await retry_response.json()
                             else:
                                 async with session.post(
-                                    url, params=request_params, data=data, **kwargs
+                                    url, params=request_params, data=data, headers=headers, **kwargs
                                 ) as retry_response:
                                     result = await retry_response.json()
                         
@@ -149,12 +162,12 @@ class PCloudAPI:
         except Exception as err:
             raise PCloudAPIError(f"Unexpected error: {err}") from err
 
-    async def async_test_connection(self) -> bool:
-        """Test the API connection."""
+    async def async_test_connection(self) -> dict[str, Any]:
+        """Test the API connection and return user info."""
         try:
             result = await self._request("GET", "/userinfo")
             _LOGGER.debug("Connection test successful: %s", result.get("email"))
-            return True
+            return result
         except Exception as err:
             _LOGGER.error("Connection test failed: %s", err)
             raise
@@ -199,6 +212,9 @@ class PCloudAPI:
         # For large files, we might need chunked upload, but for MVP we use simple upload
         session = await self._get_session()
         
+        # Determine if using OAuth2 (Bearer token) or digest auth (auth parameter)
+        is_oauth2 = hasattr(self.auth, "_access_token") and not hasattr(self.auth, "username")
+        
         # Create form data for multipart upload
         form_data = aiohttp.FormData()
         form_data.add_field("folderid", str(folder_id))
@@ -213,13 +229,21 @@ class PCloudAPI:
         
         url = f"{self._base_url}/uploadfile"
         auth_token = await self.auth.get_auth_token()
-        params = {"auth": auth_token}
         
-        # Update inactive expiration (token usage extends inactive expiration)
-        if hasattr(self.auth, "update_inactive_expiration"):
-            self.auth.update_inactive_expiration()
+        headers = {}
+        params = {}
         
-        async with session.post(url, params=params, data=form_data) as response:
+        if is_oauth2:
+            # OAuth2: Use Bearer token in Authorization header
+            headers["Authorization"] = f"Bearer {auth_token}"
+        else:
+            # Digest auth: Use auth parameter
+            params["auth"] = auth_token
+            # Update inactive expiration (token usage extends inactive expiration)
+            if hasattr(self.auth, "update_inactive_expiration"):
+                self.auth.update_inactive_expiration()
+        
+        async with session.post(url, params=params, data=form_data, headers=headers) as response:
             result = await response.json()
             
             # Check for pCloud API errors
