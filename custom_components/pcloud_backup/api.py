@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import AsyncIterator
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 from pathlib import Path
@@ -276,6 +277,113 @@ class PCloudAPI:
             _LOGGER.error("Network error uploading %s: %s", filename, err)
             raise PCloudAPIError(f"Network error uploading {filename}: {err}") from err
 
+    async def async_upload_file_from_stream(
+        self, folder_id: int, filename: str, stream: AsyncIterator[bytes]
+    ) -> dict[str, Any]:
+        """Upload a large file from async stream to pCloud using streaming to avoid disk space and memory.
+        
+        This method streams directly from an async iterator to pCloud, making it suitable
+        for large files (e.g., multi-gigabyte backups) without requiring disk space or
+        loading the entire file in memory.
+        """
+        _LOGGER.info("Starting streaming upload of %s directly from backup stream to pCloud", filename)
+        
+        session = await self._get_session()
+        
+        # Determine if using OAuth2 (Bearer token) or digest auth (auth parameter)
+        is_oauth2 = hasattr(self.auth, "_access_token") and not hasattr(self.auth, "username")
+        
+        url = f"{self._base_url}/uploadfile"
+        auth_token = await self.auth.get_auth_token()
+        
+        headers = {}
+        params = {}
+        
+        if is_oauth2:
+            # OAuth2: Use Bearer token in Authorization header
+            headers["Authorization"] = f"Bearer {auth_token}"
+        else:
+            # Digest auth: Use auth parameter
+            params["auth"] = auth_token
+            # Update inactive expiration (token usage extends inactive expiration)
+            if hasattr(self.auth, "update_inactive_expiration"):
+                self.auth.update_inactive_expiration()
+        
+        # Use aiohttp.multipart.MultipartWriter to stream directly from async iterator
+        import aiohttp.multipart
+        
+        writer = aiohttp.multipart.MultipartWriter('form-data')
+        writer.append('folderid', str(folder_id))
+        writer.append('filename', filename)
+        writer.append('nopartial', '1')
+        
+        # Create async generator that reads from stream and yields chunks
+        bytes_streamed = 0
+        chunk_count = 0
+        
+        async def stream_reader():
+            """Read from async iterator and yield bytes for multipart."""
+            nonlocal bytes_streamed, chunk_count
+            async for chunk in stream:
+                bytes_streamed += len(chunk)
+                chunk_count += 1
+                yield chunk
+                # Log progress every 100MB or every 1000 chunks
+                if chunk_count % 1000 == 0 or bytes_streamed % (100 * 1024 * 1024) < len(chunk):
+                    _LOGGER.debug(
+                        "Upload stream progress: %d MB (%d chunks)", 
+                        bytes_streamed // (1024 * 1024),
+                        chunk_count
+                    )
+        
+        # Create body part with the stream reader
+        part = writer.append(stream_reader())
+        part.set_content_disposition(
+            'form-data',
+            name='file',
+            filename=filename
+        )
+        part.set_content_type('application/octet-stream')
+        
+        _LOGGER.debug("Uploading %s to pCloud...", filename)
+        try:
+            async with session.post(
+                url, params=params, data=writer, headers=headers, timeout=UPLOAD_TIMEOUT
+            ) as response:
+                result = await response.json()
+                
+                # Check for pCloud API errors
+                if isinstance(result, dict) and result.get("result") != 0:
+                    error_msg = result.get("error", "Unknown error")
+                    error_code = result.get("result")
+                    _LOGGER.error(
+                        "pCloud API error uploading %s (code %s): %s",
+                        filename,
+                        error_code,
+                        error_msg,
+                    )
+                    raise PCloudAPIError(f"pCloud API error: {error_msg}")
+                
+                _LOGGER.info(
+                    "Successfully uploaded %s to pCloud (%d MB, %d chunks)",
+                    filename,
+                    bytes_streamed // (1024 * 1024),
+                    chunk_count
+                )
+                return result
+                
+        except asyncio.TimeoutError as err:
+            _LOGGER.error(
+                "Upload timeout for %s after %d seconds", filename, UPLOAD_TIMEOUT.total
+            )
+            raise PCloudAPIError(f"Upload timeout for {filename}") from err
+        except aiohttp.ClientError as err:
+            _LOGGER.error("Network error uploading %s: %s", filename, err, exc_info=True)
+            raise PCloudAPIError(f"Network error uploading {filename}: {err}") from err
+        except Exception as err:
+            _LOGGER.exception("Unexpected error uploading %s", filename)
+            raise PCloudAPIError(f"Unexpected error uploading {filename}: {err}") from err
+
     async def async_upload_file_from_path(
         self, folder_id: int, filename: str, file_path: str
     ) -> dict[str, Any]:
@@ -283,6 +391,7 @@ class PCloudAPI:
         
         This method streams the file from disk during upload, making it suitable
         for large files (e.g., multi-gigabyte backups) without exhausting memory.
+        Note: This method requires disk space equal to the file size.
         """
         _LOGGER.debug("Starting streaming upload of %s from %s", filename, file_path)
         
