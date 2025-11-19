@@ -434,8 +434,45 @@ class PCloudBackupAgent(BackupAgent):
             _LOGGER.info("Uploading backup %s to pCloud", backup_name)
             backup_data = b""
             stream = await open_stream()
+            chunk_count = 0
             async for chunk in stream:
                 backup_data += chunk
+                chunk_count += 1
+                # Log progress every 100MB
+                if len(backup_data) % (100 * 1024 * 1024) < len(chunk):
+                    _LOGGER.info(
+                        "Backup stream progress: %d MB received (chunk %d)",
+                        len(backup_data) // (1024 * 1024),
+                        chunk_count,
+                    )
+
+            backup_size_mb = len(backup_data) // (1024 * 1024)
+            backup_size_bytes = len(backup_data)
+            backup_metadata_size = getattr(backup, "size", 0) or 0
+            
+            _LOGGER.info(
+                "Backup stream complete: %d MB (%d bytes) received in %d chunks. "
+                "Backup metadata reports size: %d bytes (%.2f MB). "
+                "Starting upload to pCloud...",
+                backup_size_mb,
+                backup_size_bytes,
+                chunk_count,
+                backup_metadata_size,
+                backup_metadata_size / (1024 * 1024) if backup_metadata_size else 0,
+            )
+            
+            # Warn if there's a significant discrepancy between received size and metadata
+            if backup_metadata_size > 0 and backup_size_bytes > 0:
+                size_ratio = backup_size_bytes / backup_metadata_size
+                if size_ratio < 0.5:
+                    _LOGGER.warning(
+                        "Received backup size (%d MB) is much smaller than metadata size (%d MB). "
+                        "This may indicate compression (ratio: %.2f%%) or data loss. "
+                        "Verify backup completeness.",
+                        backup_size_mb,
+                        backup_metadata_size // (1024 * 1024),
+                        size_ratio * 100,
+                    )
 
             # Upload to pCloud
             await self.api.async_upload_file(folder_id, backup_name, backup_data)
