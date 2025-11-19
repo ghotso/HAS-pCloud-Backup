@@ -282,9 +282,9 @@ class PCloudAPI:
     ) -> dict[str, Any]:
         """Upload a large file from async stream to pCloud using streaming to avoid disk space and memory.
         
-        This method streams directly from an async iterator to pCloud, making it suitable
-        for large files (e.g., multi-gigabyte backups) without requiring disk space or
-        loading the entire file in memory.
+        This method streams directly from an async iterator to pCloud using FormData
+        (same format as async_upload_file_from_path) to ensure exact compatibility with pCloud API.
+        Uses a file-like wrapper around the async iterator so FormData can handle it correctly.
         """
         _LOGGER.info("Starting streaming upload of %s directly from backup stream to pCloud", filename)
         
@@ -309,80 +309,316 @@ class PCloudAPI:
             if hasattr(self.auth, "update_inactive_expiration"):
                 self.auth.update_inactive_expiration()
         
-        # Use aiohttp.multipart.MultipartWriter to stream directly from async iterator
-        import aiohttp.multipart
+        # Use FormData (same as working async_upload_file_from_path) to ensure exact format compatibility
+        # Create a file-like wrapper that bridges async iterator to FormData using a queue
+        from io import BytesIO, IOBase
+        from queue import Queue, Empty
+        from threading import Event
         
-        writer = aiohttp.multipart.MultipartWriter('form-data')
-        writer.append('folderid', str(folder_id))
-        writer.append('filename', filename)
-        writer.append('nopartial', '1')
-        
-        # Create async generator that reads from stream and yields chunks
+        # Create async generator that reads from stream and puts chunks in queue
         bytes_streamed = 0
         chunk_count = 0
+        queue: Queue[bytes | None] = Queue(maxsize=10)  # Buffer up to 10 chunks
+        stream_done = Event()
+        stream_error: Exception | None = None
         
-        async def stream_reader():
-            """Read from async iterator and yield bytes for multipart."""
-            nonlocal bytes_streamed, chunk_count
-            async for chunk in stream:
-                bytes_streamed += len(chunk)
-                chunk_count += 1
-                yield chunk
-                # Log progress every 100MB or every 1000 chunks
-                if chunk_count % 1000 == 0 or bytes_streamed % (100 * 1024 * 1024) < len(chunk):
-                    _LOGGER.debug(
-                        "Upload stream progress: %d MB (%d chunks)", 
+        async def _stream_to_queue():
+            """Read from async iterator and put chunks in queue for synchronous reading."""
+            nonlocal bytes_streamed, chunk_count, stream_error
+            try:
+                async for chunk in stream:
+                    bytes_streamed += len(chunk)
+                    chunk_count += 1
+                    await asyncio.to_thread(queue.put, chunk)
+                    
+                    # Log progress every 100MB or every 1000 chunks
+                    if chunk_count % 1000 == 0 or bytes_streamed % (100 * 1024 * 1024) < len(chunk):
+                        _LOGGER.debug(
+                            "Upload stream progress: %d MB (%d chunks)", 
+                            bytes_streamed // (1024 * 1024),
+                            chunk_count
+                        )
+            except Exception as err:
+                stream_error = err
+            finally:
+                await asyncio.to_thread(queue.put, None)  # Signal EOF
+                stream_done.set()
+        
+        # Create file-like object that reads from queue (non-blocking for event loop)
+        # Inherit from IOBase so aiohttp recognizes it as a file-like object
+        class QueueFileLike(IOBase):
+            """File-like wrapper that reads from queue populated by async iterator."""
+            def __init__(self, queue: Queue, done_event: Event):
+                super().__init__()
+                self.queue = queue
+                self.done_event = done_event
+                self._buffer = BytesIO()
+                self._closed = False
+            
+            def read(self, size: int = -1) -> bytes:
+                """Read bytes from queue - blocks thread but not event loop.
+                
+                aiohttp.FormData calls read() with various sizes. We need to:
+                1. Return immediately if we have data available
+                2. Wait for data if queue is not empty or stream is not done
+                3. Return empty bytes only when stream is truly done
+                """
+                if self._closed:
+                    return b""
+                
+                # Get current buffer size - need to reset position first
+                buffer_value = self._buffer.getvalue()
+                current_size = len(buffer_value)
+                buffer_pos = self._buffer.tell()
+                available_size = current_size - buffer_pos
+                
+                # If we have enough data in buffer at current position, return it immediately
+                if size > 0 and available_size >= size:
+                    self._buffer.seek(buffer_pos)
+                    data = self._buffer.read(size)
+                    # Keep remaining data
+                    remaining_pos = self._buffer.tell()
+                    remaining_value = self._buffer.getvalue()
+                    if remaining_pos < len(remaining_value):
+                        remaining = remaining_value[remaining_pos:]
+                        self._buffer = BytesIO(remaining)
+                    else:
+                        self._buffer = BytesIO()
+                    return data
+                
+                # Need more data - read from queue until we have enough or stream is done
+                max_wait_iterations = 1000  # Allow more iterations for large files
+                iterations = 0
+                
+                while iterations < max_wait_iterations:
+                    iterations += 1
+                    
+                    # Try to get chunk from queue (non-blocking first, then blocking)
+                    chunk = None
+                    try:
+                        chunk = self.queue.get_nowait()
+                    except Empty:
+                        # Queue is empty, check if stream is done
+                        if self.done_event.is_set():
+                            # Stream is done and queue is empty - we're at EOF
+                            break
+                        # Stream not done yet, wait a bit for data
+                        try:
+                            chunk = self.queue.get(timeout=0.05)  # 50ms timeout
+                        except Empty:
+                            # Still no data after timeout
+                            # If we have some data in buffer, return it (partial read is okay)
+                            if available_size > 0:
+                                self._buffer.seek(buffer_pos)
+                                if size == -1:
+                                    data = self._buffer.read()
+                                    self._buffer = BytesIO()
+                                else:
+                                    data = self._buffer.read(size)
+                                    remaining_pos = self._buffer.tell()
+                                    remaining_value = self._buffer.getvalue()
+                                    if remaining_pos < len(remaining_value):
+                                        remaining = remaining_value[remaining_pos:]
+                                        self._buffer = BytesIO(remaining)
+                                    else:
+                                        self._buffer = BytesIO()
+                                return data
+                            # No data available yet, continue waiting
+                            continue
+                    
+                    # Got a chunk from queue
+                    if chunk is None:  # EOF marker
+                        break
+                    
+                    # Append chunk to buffer (seek to end to append)
+                    current_buffer_value = self._buffer.getvalue()
+                    self._buffer.seek(0, 2)  # Seek to end
+                    self._buffer.write(chunk)
+                    buffer_value = self._buffer.getvalue()
+                    current_size = len(buffer_value)
+                    available_size = current_size - buffer_pos
+                    
+                    # If we have enough data and size was specified, break
+                    if size > 0 and available_size >= size:
+                        break
+                
+                # Read from buffer at current position
+                self._buffer.seek(buffer_pos)
+                if size == -1:
+                    # Return all available data
+                    data = self._buffer.read()
+                    self._buffer = BytesIO()
+                    return data
+                else:
+                    # Return requested amount (or what we have)
+                    data = self._buffer.read(size)
+                    # Keep remaining data
+                    remaining_pos = self._buffer.tell()
+                    remaining_value = self._buffer.getvalue()
+                    if remaining_pos < len(remaining_value):
+                        remaining = remaining_value[remaining_pos:]
+                        self._buffer = BytesIO(remaining)
+                    else:
+                        self._buffer = BytesIO()
+                    return data
+            
+            def readable(self) -> bool:
+                """Check if stream is readable."""
+                return not self._closed
+            
+            def seekable(self) -> bool:
+                """Check if stream is seekable (not supported)."""
+                return False
+            
+            def writable(self) -> bool:
+                """Check if stream is writable (not supported)."""
+                return False
+            
+            def __iter__(self):
+                """Make file-like object iterable for aiohttp compatibility."""
+                return self
+            
+            def __next__(self):
+                """Next chunk for iteration."""
+                chunk = self.read(8192)  # 8KB chunks
+                if not chunk:
+                    raise StopIteration
+                return chunk
+            
+            def tell(self) -> int:
+                """Return current position (not meaningful for stream, but required by some APIs)."""
+                return len(self._buffer.getvalue())
+            
+            def close(self):
+                """Close the file-like object."""
+                self._closed = True
+                self._buffer.close()
+                super().close()
+        
+        # Create FormData with parameters BEFORE file (per pCloud docs)
+        form_data = aiohttp.FormData()
+        form_data.add_field("folderid", str(folder_id))
+        form_data.add_field("filename", filename)
+        form_data.add_field("nopartial", "1")
+        
+        # Start background task to populate queue
+        stream_task = asyncio.create_task(_stream_to_queue())
+        
+        # Create file-like wrapper and add to form data
+        file_like = QueueFileLike(queue, stream_done)
+        try:
+            form_data.add_field(
+                "file",
+                file_like,
+                filename=filename,
+                content_type="application/octet-stream",
+            )
+            
+            _LOGGER.debug("Uploading %s to pCloud...", filename)
+            try:
+                async with session.post(
+                    url, params=params, data=form_data, headers=headers, timeout=UPLOAD_TIMEOUT
+                ) as response:
+                    result = await response.json()
+                    
+                    # Wait for stream task to complete
+                    try:
+                        await stream_task
+                    except Exception:
+                        pass  # Already handled in task
+                    
+                    if stream_error:
+                        raise PCloudAPIError(f"Stream error: {stream_error}") from stream_error
+                    
+                    # Check for pCloud API errors
+                    if isinstance(result, dict) and result.get("result") != 0:
+                        error_msg = result.get("error", "Unknown error")
+                        error_code = result.get("result")
+                        _LOGGER.error(
+                            "pCloud API error uploading %s (code %s): %s",
+                            filename,
+                            error_code,
+                            error_msg,
+                        )
+                        raise PCloudAPIError(f"pCloud API error: {error_msg}")
+                    
+                    _LOGGER.info(
+                        "Successfully uploaded %s to pCloud (%d MB, %d chunks)",
+                        filename,
                         bytes_streamed // (1024 * 1024),
                         chunk_count
                     )
-        
-        # Create body part with the stream reader
-        part = writer.append(stream_reader())
-        part.set_content_disposition(
-            'form-data',
-            name='file',
-            filename=filename
-        )
-        part.set_content_type('application/octet-stream')
-        
-        _LOGGER.debug("Uploading %s to pCloud...", filename)
-        try:
-            async with session.post(
-                url, params=params, data=writer, headers=headers, timeout=UPLOAD_TIMEOUT
-            ) as response:
-                result = await response.json()
-                
-                # Check for pCloud API errors
-                if isinstance(result, dict) and result.get("result") != 0:
-                    error_msg = result.get("error", "Unknown error")
-                    error_code = result.get("result")
-                    _LOGGER.error(
-                        "pCloud API error uploading %s (code %s): %s",
-                        filename,
-                        error_code,
-                        error_msg,
-                    )
-                    raise PCloudAPIError(f"pCloud API error: {error_msg}")
-                
-                _LOGGER.info(
-                    "Successfully uploaded %s to pCloud (%d MB, %d chunks)",
+                    return result
+                    
+            except asyncio.TimeoutError as err:
+                # Cancel stream task immediately on timeout
+                if not stream_task.done():
+                    stream_task.cancel()
+                    try:
+                        await stream_task
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                _LOGGER.error(
+                    "Upload timeout for %s after %d seconds. This may occur with very large backups. "
+                    "Consider checking network connection and pCloud server status.",
                     filename,
-                    bytes_streamed // (1024 * 1024),
-                    chunk_count
+                    UPLOAD_TIMEOUT.total
                 )
-                return result
-                
-        except asyncio.TimeoutError as err:
-            _LOGGER.error(
-                "Upload timeout for %s after %d seconds", filename, UPLOAD_TIMEOUT.total
-            )
-            raise PCloudAPIError(f"Upload timeout for {filename}") from err
-        except aiohttp.ClientError as err:
-            _LOGGER.error("Network error uploading %s: %s", filename, err, exc_info=True)
-            raise PCloudAPIError(f"Network error uploading {filename}: {err}") from err
-        except Exception as err:
-            _LOGGER.exception("Unexpected error uploading %s", filename)
-            raise PCloudAPIError(f"Unexpected error uploading {filename}: {err}") from err
+                raise PCloudAPIError(f"Upload timeout for {filename}") from err
+            except (aiohttp.ClientOSError, aiohttp.ServerDisconnectedError) as err:
+                # Cancel stream task immediately on connection error
+                if not stream_task.done():
+                    stream_task.cancel()
+                    try:
+                        await stream_task
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                # Connection reset or server disconnected
+                _LOGGER.error(
+                    "Connection error during upload of %s: %s. "
+                    "pCloud may have rejected the request format or connection was interrupted.",
+                    filename,
+                    err,
+                    exc_info=True
+                )
+                raise PCloudAPIError(
+                    f"Connection error uploading {filename}: {err}"
+                ) from err
+            except aiohttp.ClientError as err:
+                # Cancel stream task immediately on client error
+                if not stream_task.done():
+                    stream_task.cancel()
+                    try:
+                        await stream_task
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                _LOGGER.error(
+                    "Client error uploading %s: %s",
+                    filename,
+                    err,
+                    exc_info=True
+                )
+                raise PCloudAPIError(f"Client error uploading {filename}: {err}") from err
+            except Exception as err:
+                # Cancel stream task immediately on any error
+                if not stream_task.done():
+                    stream_task.cancel()
+                    try:
+                        await stream_task
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                _LOGGER.exception("Unexpected error uploading %s", filename)
+                raise PCloudAPIError(f"Unexpected error uploading {filename}: {err}") from err
+            finally:
+                # Ensure stream task is cancelled if still running
+                if not stream_task.done():
+                    stream_task.cancel()
+                    try:
+                        await stream_task
+                    except (asyncio.CancelledError, Exception):
+                        pass
+        finally:
+            file_like.close()
 
     async def async_upload_file_from_path(
         self, folder_id: int, filename: str, file_path: str
