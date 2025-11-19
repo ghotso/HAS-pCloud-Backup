@@ -1,8 +1,10 @@
 """Backup agent implementation for pCloud."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import tempfile
 from collections.abc import AsyncIterator, Callable, Coroutine
 from pathlib import Path
 from urllib.parse import unquote
@@ -430,52 +432,81 @@ class PCloudBackupAgent(BackupAgent):
                             cleanup_err,
                         )
 
-            # Read backup data from stream
-            _LOGGER.info("Uploading backup %s to pCloud", backup_name)
-            backup_data = b""
-            stream = await open_stream()
-            chunk_count = 0
-            async for chunk in stream:
-                backup_data += chunk
-                chunk_count += 1
-                # Log progress every 100MB
-                if len(backup_data) % (100 * 1024 * 1024) < len(chunk):
-                    _LOGGER.info(
-                        "Backup stream progress: %d MB received (chunk %d)",
-                        len(backup_data) // (1024 * 1024),
-                        chunk_count,
-                    )
-
-            backup_size_mb = len(backup_data) // (1024 * 1024)
-            backup_size_bytes = len(backup_data)
-            backup_metadata_size = getattr(backup, "size", 0) or 0
-            
-            _LOGGER.info(
-                "Backup stream complete: %d MB (%d bytes) received in %d chunks. "
-                "Backup metadata reports size: %d bytes (%.2f MB). "
-                "Starting upload to pCloud...",
-                backup_size_mb,
-                backup_size_bytes,
-                chunk_count,
-                backup_metadata_size,
-                backup_metadata_size / (1024 * 1024) if backup_metadata_size else 0,
-            )
-            
-            # Warn if there's a significant discrepancy between received size and metadata
-            if backup_metadata_size > 0 and backup_size_bytes > 0:
-                size_ratio = backup_size_bytes / backup_metadata_size
-                if size_ratio < 0.5:
-                    _LOGGER.warning(
-                        "Received backup size (%d MB) is much smaller than metadata size (%d MB). "
-                        "This may indicate compression (ratio: %.2f%%) or data loss. "
-                        "Verify backup completeness.",
-                        backup_size_mb,
-                        backup_metadata_size // (1024 * 1024),
-                        size_ratio * 100,
-                    )
-
-            # Upload to pCloud
-            await self.api.async_upload_file(folder_id, backup_name, backup_data)
+            # Write backup stream to temporary file to avoid loading entire backup in memory
+            _LOGGER.info("Starting upload of backup %s to pCloud", backup_name)
+            temp_file = None
+            try:
+                # Create temporary file for backup data
+                temp_file_obj = tempfile.NamedTemporaryFile(delete=False)
+                temp_file = temp_file_obj.name
+                
+                try:
+                    # Write stream to temporary file in chunks to avoid memory accumulation
+                    stream = await open_stream()
+                    bytes_written = 0
+                    chunk_count = 0
+                    
+                    async def write_chunk(chunk_data: bytes) -> None:
+                        """Write chunk to file using executor to avoid blocking event loop."""
+                        await asyncio.to_thread(temp_file_obj.write, chunk_data)
+                    
+                    async for chunk in stream:
+                        await write_chunk(chunk)
+                        bytes_written += len(chunk)
+                        chunk_count += 1
+                        # Log progress every 100MB or every 1000 chunks
+                        if chunk_count % 1000 == 0 or bytes_written % (100 * 1024 * 1024) == 0:
+                            _LOGGER.debug(
+                                "Upload progress for %s: %d MB written, %d chunks processed",
+                                backup_name,
+                                bytes_written // (1024 * 1024),
+                                chunk_count,
+                            )
+                    
+                    # Ensure all data is written to disk and close file
+                    await asyncio.to_thread(temp_file_obj.flush)
+                finally:
+                    # Close the file before uploading
+                    await asyncio.to_thread(temp_file_obj.close)
+                
+                backup_size_mb = bytes_written // (1024 * 1024)
+                backup_size_bytes = bytes_written
+                backup_metadata_size = getattr(backup, "size", 0) or 0
+                
+                _LOGGER.info(
+                    "Backup %s written to temporary file (%d MB). "
+                    "Backup metadata reports size: %d bytes (%.2f MB). "
+                    "Starting upload to pCloud...",
+                    backup_name,
+                    backup_size_mb,
+                    backup_metadata_size,
+                    backup_metadata_size / (1024 * 1024) if backup_metadata_size else 0,
+                )
+                
+                # Warn if there's a significant discrepancy between received size and metadata
+                if backup_metadata_size > 0 and backup_size_bytes > 0:
+                    size_ratio = backup_size_bytes / backup_metadata_size
+                    if size_ratio < 0.5:
+                        _LOGGER.warning(
+                            "Received backup size (%d MB) is much smaller than metadata size (%d MB). "
+                            "This may indicate compression (ratio: %.2f%%) or data loss. "
+                            "Verify backup completeness.",
+                            backup_size_mb,
+                            backup_metadata_size // (1024 * 1024),
+                            size_ratio * 100,
+                        )
+                
+                # Upload from file path (streams from file, doesn't load entire file in memory)
+                await self.api.async_upload_file_from_path(folder_id, backup_name, temp_file)
+                
+            finally:
+                # Always clean up temporary file
+                if temp_file:
+                    try:
+                        await asyncio.to_thread(Path(temp_file).unlink, missing_ok=True)
+                        _LOGGER.debug("Cleaned up temporary file: %s", temp_file)
+                    except Exception as cleanup_err:  # noqa: BLE001
+                        _LOGGER.warning("Failed to clean up temporary file %s: %s", temp_file, cleanup_err)
 
             # Upload metadata so we can faithfully reconstruct the AgentBackup
             backup_dict = backup.as_dict()
@@ -557,13 +588,9 @@ class PCloudBackupAgent(BackupAgent):
             if file_id is None:
                 raise BackupNotFound(f"Backup {backup_name} has no file ID")
 
-            _LOGGER.info("Downloading backup %s from pCloud", backup_name)
-            backup_data = await self.api.async_download_file(file_id)
-
-            # Write to local path
-            with open(backup_path, "wb") as local_file:
-                local_file.write(backup_data)
-
+            _LOGGER.info("Downloading backup %s from pCloud to %s", backup_name, backup_path)
+            # Use streaming download to avoid loading entire backup in memory
+            await self.api.async_download_file_to_path(file_id, backup_path)
             _LOGGER.info("Successfully downloaded backup %s", backup_name)
 
         except BackupNotFound:

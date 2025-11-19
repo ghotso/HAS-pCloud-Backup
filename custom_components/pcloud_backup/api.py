@@ -1,9 +1,11 @@
 """pCloud API wrapper."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime
 from email.utils import parsedate_to_datetime
+from pathlib import Path
 from typing import Any
 
 import aiohttp
@@ -13,6 +15,14 @@ from .auth import PCloudAuth
 from .const import API_BASE_EU, API_BASE_US
 
 _LOGGER = logging.getLogger(__name__)
+
+# Timeout configuration for HTTP requests
+# Connect timeout: time to establish connection
+# Total timeout: total time for entire request (important for large uploads)
+CONNECT_TIMEOUT = aiohttp.ClientTimeout(connect=30)  # 30 seconds to connect
+UPLOAD_TIMEOUT = aiohttp.ClientTimeout(connect=30, total=3600)  # 1 hour total for large uploads
+DOWNLOAD_TIMEOUT = aiohttp.ClientTimeout(connect=30, total=3600)  # 1 hour total for large downloads
+STANDARD_TIMEOUT = aiohttp.ClientTimeout(connect=30, total=120)  # 2 minutes for standard requests
 
 
 class PCloudAPIError(Exception):
@@ -76,6 +86,10 @@ class PCloudAPI:
             # Update inactive expiration (token usage extends inactive expiration)
             if hasattr(self.auth, "update_inactive_expiration"):
                 self.auth.update_inactive_expiration()
+
+        # Set default timeout if not specified
+        if "timeout" not in kwargs:
+            kwargs["timeout"] = STANDARD_TIMEOUT
 
         try:
             if method.upper() == "GET":
@@ -243,15 +257,131 @@ class PCloudAPI:
             if hasattr(self.auth, "update_inactive_expiration"):
                 self.auth.update_inactive_expiration()
         
-        async with session.post(url, params=params, data=form_data, headers=headers) as response:
-            result = await response.json()
+        try:
+            async with session.post(
+                url, params=params, data=form_data, headers=headers, timeout=STANDARD_TIMEOUT
+            ) as response:
+                result = await response.json()
+                
+                # Check for pCloud API errors
+                if isinstance(result, dict) and result.get("result") != 0:
+                    error_msg = result.get("error", "Unknown error")
+                    raise PCloudAPIError(f"pCloud API error: {error_msg}")
+                
+                return result
+        except asyncio.TimeoutError as err:
+            _LOGGER.error("Upload timeout for %s: %s", filename, err)
+            raise PCloudAPIError(f"Upload timeout for {filename}") from err
+        except aiohttp.ClientError as err:
+            _LOGGER.error("Network error uploading %s: %s", filename, err)
+            raise PCloudAPIError(f"Network error uploading {filename}: {err}") from err
+
+    async def async_upload_file_from_path(
+        self, folder_id: int, filename: str, file_path: str
+    ) -> dict[str, Any]:
+        """Upload a large file from disk to pCloud using streaming to avoid loading entire file in memory.
+        
+        This method streams the file from disk during upload, making it suitable
+        for large files (e.g., multi-gigabyte backups) without exhausting memory.
+        """
+        _LOGGER.debug("Starting streaming upload of %s from %s", filename, file_path)
+        
+        # Verify file exists and get size
+        try:
+            file_stat = await asyncio.to_thread(Path(file_path).stat)
+            file_size_bytes = file_stat.st_size
+            _LOGGER.info(
+                "Uploading %s (%d MB) to pCloud folder %d",
+                filename,
+                file_size_bytes // (1024 * 1024),
+                folder_id,
+            )
+        except Exception as err:
+            _LOGGER.error("Failed to stat file %s: %s", file_path, err)
+            raise PCloudAPIError(f"File not found or inaccessible: {file_path}") from err
+        
+        session = await self._get_session()
+        
+        # Determine if using OAuth2 (Bearer token) or digest auth (auth parameter)
+        is_oauth2 = hasattr(self.auth, "_access_token") and not hasattr(self.auth, "username")
+        
+        # Create form data for multipart upload
+        form_data = aiohttp.FormData()
+        form_data.add_field("folderid", str(folder_id))
+        form_data.add_field("filename", filename)
+        form_data.add_field("nopartial", "1")
+        
+        url = f"{self._base_url}/uploadfile"
+        auth_token = await self.auth.get_auth_token()
+        
+        headers = {}
+        params = {}
+        
+        if is_oauth2:
+            # OAuth2: Use Bearer token in Authorization header
+            headers["Authorization"] = f"Bearer {auth_token}"
+        else:
+            # Digest auth: Use auth parameter
+            params["auth"] = auth_token
+            # Update inactive expiration (token usage extends inactive expiration)
+            if hasattr(self.auth, "update_inactive_expiration"):
+                self.auth.update_inactive_expiration()
+        
+        # Open file in binary mode and add to form data
+        # aiohttp.FormData can handle file objects and will stream them
+        try:
+            # Open file asynchronously to avoid blocking
+            file_obj = await asyncio.to_thread(open, file_path, "rb")
             
-            # Check for pCloud API errors
-            if isinstance(result, dict) and result.get("result") != 0:
-                error_msg = result.get("error", "Unknown error")
-                raise PCloudAPIError(f"pCloud API error: {error_msg}")
-            
-            return result
+            try:
+                form_data.add_field(
+                    "file",
+                    file_obj,
+                    filename=filename,
+                    content_type="application/octet-stream",
+                )
+                
+                _LOGGER.debug("Uploading %s to pCloud...", filename)
+                try:
+                    async with session.post(
+                        url, params=params, data=form_data, headers=headers, timeout=UPLOAD_TIMEOUT
+                    ) as response:
+                        result = await response.json()
+                        
+                        # Check for pCloud API errors
+                        if isinstance(result, dict) and result.get("result") != 0:
+                            error_msg = result.get("error", "Unknown error")
+                            error_code = result.get("result")
+                            _LOGGER.error(
+                                "pCloud API error uploading %s (code %s): %s",
+                                filename,
+                                error_code,
+                                error_msg,
+                            )
+                            raise PCloudAPIError(f"pCloud API error: {error_msg}")
+                        
+                        _LOGGER.info("Successfully uploaded %s to pCloud", filename)
+                        return result
+                        
+                except asyncio.TimeoutError as err:
+                    _LOGGER.error(
+                        "Upload timeout for %s after %d seconds", filename, UPLOAD_TIMEOUT.total
+                    )
+                    raise PCloudAPIError(f"Upload timeout for {filename}") from err
+                except aiohttp.ClientError as err:
+                    _LOGGER.error("Network error uploading %s: %s", filename, err, exc_info=True)
+                    raise PCloudAPIError(f"Network error uploading {filename}: {err}") from err
+                except Exception as err:
+                    _LOGGER.exception("Unexpected error uploading %s", filename)
+                    raise PCloudAPIError(f"Unexpected error uploading {filename}: {err}") from err
+                    
+            finally:
+                # Always close the file
+                await asyncio.to_thread(file_obj.close)
+                
+        except OSError as err:
+            _LOGGER.error("Failed to open file %s: %s", file_path, err)
+            raise PCloudAPIError(f"Failed to open file {file_path}: {err}") from err
 
     async def async_list_folder(self, folder_id: int) -> list[dict[str, Any]]:
         """List files in a folder."""
@@ -295,15 +425,81 @@ class PCloudAPI:
         await self._request("POST", "/deletefile", {"fileid": file_id})
 
     async def async_download_file(self, file_id: int) -> bytes:
-        """Download a file from pCloud."""
+        """Download a small file from pCloud (returns bytes).
+        
+        For large files, use async_download_file_to_path instead to avoid
+        loading the entire file into memory.
+        """
         download_link = await self.async_get_file_link(file_id)
         session = await self._get_session()
         
         # Download links from pCloud don't require auth token
-        async with session.get(download_link) as response:
-            if response.status != 200:
-                raise PCloudAPIError(f"Download failed with status {response.status}")
-            return await response.read()
+        try:
+            async with session.get(download_link, timeout=STANDARD_TIMEOUT) as response:
+                if response.status != 200:
+                    raise PCloudAPIError(f"Download failed with status {response.status}")
+                return await response.read()
+        except asyncio.TimeoutError as err:
+            _LOGGER.error("Download timeout for file %d: %s", file_id, err)
+            raise PCloudAPIError(f"Download timeout for file {file_id}") from err
+        except aiohttp.ClientError as err:
+            _LOGGER.error("Network error downloading file %d: %s", file_id, err)
+            raise PCloudAPIError(f"Network error downloading file {file_id}: {err}") from err
+
+    async def async_download_file_to_path(self, file_id: int, file_path: str) -> None:
+        """Download a large file from pCloud and write it to disk using streaming.
+        
+        This method streams the file to disk during download, making it suitable
+        for large files without exhausting memory.
+        """
+        _LOGGER.info("Downloading file %d from pCloud to %s", file_id, file_path)
+        
+        download_link = await self.async_get_file_link(file_id)
+        session = await self._get_session()
+        
+        # Download links from pCloud don't require auth token
+        try:
+            async with session.get(download_link, timeout=DOWNLOAD_TIMEOUT) as response:
+                if response.status != 200:
+                    raise PCloudAPIError(f"Download failed with status {response.status}")
+                
+                # Stream the response to disk
+                # Use executor for file I/O to avoid blocking event loop
+                file_obj = await asyncio.to_thread(open, file_path, "wb")
+                bytes_downloaded = 0
+                
+                try:
+                    async for chunk in response.content.iter_chunked(8192):  # 8KB chunks
+                        await asyncio.to_thread(file_obj.write, chunk)
+                        bytes_downloaded += len(chunk)
+                        # Log progress every 100MB
+                        if bytes_downloaded % (100 * 1024 * 1024) < 8192:
+                            _LOGGER.debug(
+                                "Download progress: %d MB downloaded", bytes_downloaded // (1024 * 1024)
+                            )
+                    
+                    await asyncio.to_thread(file_obj.flush)
+                    _LOGGER.info(
+                        "Successfully downloaded file %d (%d MB) to %s",
+                        file_id,
+                        bytes_downloaded // (1024 * 1024),
+                        file_path,
+                    )
+                finally:
+                    await asyncio.to_thread(file_obj.close)
+                    
+        except asyncio.TimeoutError as err:
+            _LOGGER.error("Download timeout for file %d after %d seconds", file_id, DOWNLOAD_TIMEOUT.total)
+            raise PCloudAPIError(f"Download timeout for file {file_id}") from err
+        except aiohttp.ClientError as err:
+            _LOGGER.error("Network error downloading file %d: %s", file_id, err, exc_info=True)
+            raise PCloudAPIError(f"Network error downloading file {file_id}: {err}") from err
+        except OSError as err:
+            _LOGGER.error("Failed to write file %s: %s", file_path, err)
+            raise PCloudAPIError(f"Failed to write file {file_path}: {err}") from err
+        except Exception as err:
+            _LOGGER.exception("Unexpected error downloading file %d", file_id)
+            raise PCloudAPIError(f"Unexpected error downloading file {file_id}: {err}") from err
 
     def parse_backup_info(self, file_item: dict[str, Any]) -> dict[str, Any]:
         """Parse backup file information."""
