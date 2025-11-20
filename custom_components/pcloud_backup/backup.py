@@ -172,11 +172,19 @@ class PCloudBackupAgent(BackupAgent):
             if "extra_metadata" not in backup_dict:
                 backup_dict = {**backup_dict, "extra_metadata": {}}
             extra_metadata = dict(backup_dict["extra_metadata"])
-            if "original_backup_id" not in extra_metadata:
-                extra_metadata["original_backup_id"] = backup_dict.get("backup_id")
+            
+            # Keep the original backup_id from metadata (it should already be correct)
+            # If the metadata has our slug-based format, try to restore from extra_metadata
+            current_backup_id = backup_dict.get("backup_id", "")
+            if current_backup_id.startswith(f"{self.slug}:"):
+                # Metadata has our slug format, try to restore original
+                original_backup_id = extra_metadata.get("original_backup_id")
+                if original_backup_id:
+                    backup_dict["backup_id"] = original_backup_id
+                # If no original_backup_id, keep the slug format (old metadata)
+            # Otherwise, keep the backup_id as-is (it's already correct)
 
             backup_dict["extra_metadata"] = extra_metadata
-            backup_dict["backup_id"] = f"{self.slug}:{metadata_key}"
 
             if (size := backup_file_item.get("size")) is not None:
                 backup_dict = {**backup_dict, "size": size}
@@ -455,12 +463,20 @@ class PCloudBackupAgent(BackupAgent):
             )
 
             # Upload metadata so we can faithfully reconstruct the AgentBackup
+            # CRITICAL: Preserve the original backup_id for HA to match decryption keys
+            # Do NOT change backup_id - HA uses it to find decryption keys
             backup_dict = backup.as_dict()
             original_backup_id = backup_dict.get("backup_id")
-            backup_dict["backup_id"] = f"{self.slug}:{metadata_key}"
+            
+            # Store slug-based ID in extra_metadata for lookup purposes
+            # but keep the original backup_id unchanged
             extra_metadata = dict(backup_dict.get("extra_metadata", {}))
+            extra_metadata["slug_backup_id"] = f"{self.slug}:{metadata_key}"
             if original_backup_id and extra_metadata.get("original_backup_id") is None:
                 extra_metadata["original_backup_id"] = original_backup_id
+            
+            # Keep the original backup_id unchanged (needed for HA decryption key matching)
+            # Do NOT overwrite it with slug-based format
             backup_dict["extra_metadata"] = extra_metadata
             metadata_payload = json.dumps(
                 {"metadata_version": METADATA_VERSION, "backup": backup_dict},
@@ -500,9 +516,20 @@ class PCloudBackupAgent(BackupAgent):
             raise
 
     async def async_download_backup(
-        self, backup_name: str, backup_path: str
-    ) -> None:
-        """Download a backup from pCloud."""
+        self, backup_id: str
+    ) -> AsyncIterator[bytes]:
+        """Download a backup from pCloud and return as an async stream.
+        
+        This method is called by Home Assistant to download backups for decryption
+        checks and actual downloads. It returns an async iterator that yields
+        chunks of the backup file.
+        
+        Args:
+            backup_id: The backup ID (can be backup_id or backup name)
+            
+        Returns:
+            AsyncIterator[bytes]: An async iterator that yields chunks of backup file data
+        """
         try:
             config_entry = self.hass.config_entries.async_get_entry(self.config_entry_id)
             if config_entry is None:
@@ -516,9 +543,9 @@ class PCloudBackupAgent(BackupAgent):
                 folder_id
             )
 
-            metadata_key = backup_id_index.get(backup_name)
+            metadata_key = backup_id_index.get(backup_id)
             if metadata_key is None:
-                metadata_key = self._metadata_key_from_input(backup_name)
+                metadata_key = self._metadata_key_from_input(backup_id)
 
             backup_file = backup_files.get(metadata_key)
             if backup_file is None and metadata_key in backups_by_key:
@@ -527,17 +554,17 @@ class PCloudBackupAgent(BackupAgent):
                 metadata_key = derived_key
 
             if backup_file is None:
-                raise BackupNotFound(f"Backup {backup_name} not found in pCloud")
+                raise BackupNotFound(f"Backup {backup_id} not found in pCloud")
 
-            # Download file
+            # Get file ID for download
             file_id = backup_file.get("fileid")
             if file_id is None:
-                raise BackupNotFound(f"Backup {backup_name} has no file ID")
+                raise BackupNotFound(f"Backup {backup_id} has no file ID")
 
-            _LOGGER.info("Downloading backup %s from pCloud to %s", backup_name, backup_path)
-            # Use streaming download to avoid loading entire backup in memory
-            await self.api.async_download_file_to_path(file_id, backup_path)
-            _LOGGER.info("Successfully downloaded backup %s", backup_name)
+            _LOGGER.info("Downloading backup %s from pCloud (streaming)", backup_id)
+            # Return the async iterator directly from the API
+            # This is an async generator, which is an AsyncIterator
+            return self.api.async_download_file_stream(file_id)
 
         except BackupNotFound:
             raise

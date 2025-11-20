@@ -988,6 +988,38 @@ class PCloudAPI:
             _LOGGER.error("Network error downloading file %d: %s", file_id, err)
             raise PCloudAPIError(f"Network error downloading file {file_id}: {err}") from err
 
+    async def async_download_file_stream(self, file_id: int) -> AsyncIterator[bytes]:
+        """Download a file from pCloud and return as an async stream.
+        
+        This method streams the file without loading it entirely into memory,
+        making it suitable for large files.
+        
+        Args:
+            file_id: pCloud file ID to download
+            
+        Yields:
+            bytes: Chunks of file data
+        """
+        download_link = await self.async_get_file_link(file_id)
+        session = await self._get_session()
+        
+        # Download links from pCloud don't require auth token
+        try:
+            async with session.get(download_link, timeout=DOWNLOAD_TIMEOUT) as response:
+                if response.status != 200:
+                    raise PCloudAPIError(f"Download failed with status {response.status}")
+                
+                # Stream the response in chunks
+                async for chunk in response.content.iter_chunked(8192):  # 8KB chunks
+                    yield chunk
+                    
+        except asyncio.TimeoutError as err:
+            _LOGGER.error("Download timeout for file %d: %s", file_id, err)
+            raise PCloudAPIError(f"Download timeout for file {file_id}") from err
+        except aiohttp.ClientError as err:
+            _LOGGER.error("Network error downloading file %d: %s", file_id, err)
+            raise PCloudAPIError(f"Network error downloading file {file_id}: {err}") from err
+
     async def async_download_file_to_path(self, file_id: int, file_path: str) -> None:
         """Download a large file from pCloud and write it to disk using streaming.
         
