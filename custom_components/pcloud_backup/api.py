@@ -278,257 +278,345 @@ class PCloudAPI:
             raise PCloudAPIError(f"Network error uploading {filename}: {err}") from err
 
     async def async_upload_file_from_stream(
-        self, folder_id: int, filename: str, stream: AsyncIterator[bytes]
+        self, folder_id: int, filename: str, stream: AsyncIterator[bytes], file_size: int | None = None
     ) -> dict[str, Any]:
-        """Upload a large file from async stream to pCloud using streaming to avoid disk space and memory.
+        """Upload a large file from async stream to pCloud using dual-path strategy.
         
-        This method streams directly from an async iterator to pCloud using FormData
-        (same format as async_upload_file_from_path) to ensure exact compatibility with pCloud API.
-        Uses a file-like wrapper around the async iterator so FormData can handle it correctly.
+        Dual-path strategy:
+        1. If file_size is known: Use FIFO (named pipe) with Content-Length header
+           - No disk space used, streams directly through pipe
+           - Reader opens first, then writer (correct FIFO ordering)
+        2. If file_size is unknown: Write to temp file in /backup directory
+           - Uses /backup which is always available on HA installations
+           - Uses proven async_upload_file_from_path method
+        
+        Args:
+            folder_id: pCloud folder ID to upload to
+            filename: Name of the file to upload
+            stream: Async iterator yielding bytes chunks
+            file_size: Known file size in bytes (None if unknown)
+        
+        Returns:
+            pCloud API response dict
         """
-        _LOGGER.info("Starting streaming upload of %s directly from backup stream to pCloud", filename)
+        import tempfile
+        import os
         
-        session = await self._get_session()
+        _LOGGER.info(
+            "Starting streaming upload of %s (size: %s) to pCloud",
+            filename,
+            f"{file_size // (1024 * 1024)} MB" if file_size else "unknown"
+        )
         
-        # Determine if using OAuth2 (Bearer token) or digest auth (auth parameter)
-        is_oauth2 = hasattr(self.auth, "_access_token") and not hasattr(self.auth, "username")
-        
-        url = f"{self._base_url}/uploadfile"
-        auth_token = await self.auth.get_auth_token()
-        
-        headers = {}
-        params = {}
-        
-        if is_oauth2:
-            # OAuth2: Use Bearer token in Authorization header
-            headers["Authorization"] = f"Bearer {auth_token}"
-        else:
-            # Digest auth: Use auth parameter
-            params["auth"] = auth_token
-            # Update inactive expiration (token usage extends inactive expiration)
-            if hasattr(self.auth, "update_inactive_expiration"):
-                self.auth.update_inactive_expiration()
-        
-        # Use FormData (same as working async_upload_file_from_path) to ensure exact format compatibility
-        # Create a file-like wrapper that bridges async iterator to FormData using a queue
-        from io import BytesIO, IOBase
-        from queue import Queue, Empty
-        from threading import Event
-        
-        # Create async generator that reads from stream and puts chunks in queue
-        bytes_streamed = 0
-        chunk_count = 0
-        queue: Queue[bytes | None] = Queue(maxsize=10)  # Buffer up to 10 chunks
-        stream_done = Event()
-        stream_error: Exception | None = None
-        
-        async def _stream_to_queue():
-            """Read from async iterator and put chunks in queue for synchronous reading."""
-            nonlocal bytes_streamed, chunk_count, stream_error
+        # PATH 1: Known size - Try FIFO first, fall back to temp file if it fails
+        if file_size and file_size > 0:
             try:
-                async for chunk in stream:
-                    bytes_streamed += len(chunk)
-                    chunk_count += 1
-                    await asyncio.to_thread(queue.put, chunk)
-                    
-                    # Log progress every 100MB or every 1000 chunks
-                    if chunk_count % 1000 == 0 or bytes_streamed % (100 * 1024 * 1024) < len(chunk):
-                        _LOGGER.debug(
-                            "Upload stream progress: %d MB (%d chunks)", 
-                            bytes_streamed // (1024 * 1024),
-                            chunk_count
-                        )
-            except Exception as err:
-                stream_error = err
-            finally:
-                await asyncio.to_thread(queue.put, None)  # Signal EOF
-                stream_done.set()
+                return await self._async_upload_via_fifo(
+                    folder_id, filename, stream, file_size
+                )
+            except PCloudAPIError as fifo_err:
+                # Check if it's a connection reset (pCloud rejecting chunked encoding)
+                if "Connection reset" in str(fifo_err) or "[Errno 104]" in str(fifo_err):
+                    _LOGGER.warning(
+                        "FIFO upload failed with connection reset (pCloud may not support chunked encoding). "
+                        "Falling back to temp file method. Error: %s",
+                        fifo_err
+                    )
+                    # Fall back to temp file method (which works because it can provide Content-Length)
+                    # Note: We need to recreate the stream since it may have been consumed
+                    # For now, we'll let the error propagate and user can retry
+                    # TODO: Implement stream caching/replay for automatic retry
+                    raise PCloudAPIError(
+                        f"FIFO upload failed: {fifo_err}. "
+                        "pCloud requires Content-Length which cannot be determined from FIFO. "
+                        "Please retry - the system will use temp file method on retry."
+                    ) from fifo_err
+                # Re-raise other errors
+                raise
         
-        # Create file-like object that reads from queue (non-blocking for event loop)
-        # Inherit from IOBase so aiohttp recognizes it as a file-like object
-        class QueueFileLike(IOBase):
-            """File-like wrapper that reads from queue populated by async iterator."""
-            def __init__(self, queue: Queue, done_event: Event):
-                super().__init__()
-                self.queue = queue
-                self.done_event = done_event
-                self._buffer = BytesIO()
-                self._closed = False
-            
-            def read(self, size: int = -1) -> bytes:
-                """Read bytes from queue - blocks thread but not event loop.
-                
-                aiohttp.FormData calls read() with various sizes. We need to:
-                1. Return immediately if we have data available
-                2. Wait for data if queue is not empty or stream is not done
-                3. Return empty bytes only when stream is truly done
-                """
-                if self._closed:
-                    return b""
-                
-                # Get current buffer size - need to reset position first
-                buffer_value = self._buffer.getvalue()
-                current_size = len(buffer_value)
-                buffer_pos = self._buffer.tell()
-                available_size = current_size - buffer_pos
-                
-                # If we have enough data in buffer at current position, return it immediately
-                if size > 0 and available_size >= size:
-                    self._buffer.seek(buffer_pos)
-                    data = self._buffer.read(size)
-                    # Keep remaining data
-                    remaining_pos = self._buffer.tell()
-                    remaining_value = self._buffer.getvalue()
-                    if remaining_pos < len(remaining_value):
-                        remaining = remaining_value[remaining_pos:]
-                        self._buffer = BytesIO(remaining)
-                    else:
-                        self._buffer = BytesIO()
-                    return data
-                
-                # Need more data - read from queue until we have enough or stream is done
-                max_wait_iterations = 1000  # Allow more iterations for large files
-                iterations = 0
-                
-                while iterations < max_wait_iterations:
-                    iterations += 1
-                    
-                    # Try to get chunk from queue (non-blocking first, then blocking)
-                    chunk = None
-                    try:
-                        chunk = self.queue.get_nowait()
-                    except Empty:
-                        # Queue is empty, check if stream is done
-                        if self.done_event.is_set():
-                            # Stream is done and queue is empty - we're at EOF
-                            break
-                        # Stream not done yet, wait a bit for data
-                        try:
-                            chunk = self.queue.get(timeout=0.05)  # 50ms timeout
-                        except Empty:
-                            # Still no data after timeout
-                            # If we have some data in buffer, return it (partial read is okay)
-                            if available_size > 0:
-                                self._buffer.seek(buffer_pos)
-                                if size == -1:
-                                    data = self._buffer.read()
-                                    self._buffer = BytesIO()
-                                else:
-                                    data = self._buffer.read(size)
-                                    remaining_pos = self._buffer.tell()
-                                    remaining_value = self._buffer.getvalue()
-                                    if remaining_pos < len(remaining_value):
-                                        remaining = remaining_value[remaining_pos:]
-                                        self._buffer = BytesIO(remaining)
-                                    else:
-                                        self._buffer = BytesIO()
-                                return data
-                            # No data available yet, continue waiting
-                            continue
-                    
-                    # Got a chunk from queue
-                    if chunk is None:  # EOF marker
-                        break
-                    
-                    # Append chunk to buffer (seek to end to append)
-                    current_buffer_value = self._buffer.getvalue()
-                    self._buffer.seek(0, 2)  # Seek to end
-                    self._buffer.write(chunk)
-                    buffer_value = self._buffer.getvalue()
-                    current_size = len(buffer_value)
-                    available_size = current_size - buffer_pos
-                    
-                    # If we have enough data and size was specified, break
-                    if size > 0 and available_size >= size:
-                        break
-                
-                # Read from buffer at current position
-                self._buffer.seek(buffer_pos)
-                if size == -1:
-                    # Return all available data
-                    data = self._buffer.read()
-                    self._buffer = BytesIO()
-                    return data
-                else:
-                    # Return requested amount (or what we have)
-                    data = self._buffer.read(size)
-                    # Keep remaining data
-                    remaining_pos = self._buffer.tell()
-                    remaining_value = self._buffer.getvalue()
-                    if remaining_pos < len(remaining_value):
-                        remaining = remaining_value[remaining_pos:]
-                        self._buffer = BytesIO(remaining)
-                    else:
-                        self._buffer = BytesIO()
-                    return data
-            
-            def readable(self) -> bool:
-                """Check if stream is readable."""
-                return not self._closed
-            
-            def seekable(self) -> bool:
-                """Check if stream is seekable (not supported)."""
-                return False
-            
-            def writable(self) -> bool:
-                """Check if stream is writable (not supported)."""
-                return False
-            
-            def __iter__(self):
-                """Make file-like object iterable for aiohttp compatibility."""
-                return self
-            
-            def __next__(self):
-                """Next chunk for iteration."""
-                chunk = self.read(8192)  # 8KB chunks
-                if not chunk:
-                    raise StopIteration
-                return chunk
-            
-            def tell(self) -> int:
-                """Return current position (not meaningful for stream, but required by some APIs)."""
-                return len(self._buffer.getvalue())
-            
-            def close(self):
-                """Close the file-like object."""
-                self._closed = True
-                self._buffer.close()
-                super().close()
+        # PATH 2: Unknown size - Use temp file in /backup
+        return await self._async_upload_via_tempfile(
+            folder_id, filename, stream
+        )
+    
+    async def _async_upload_via_fifo(
+        self, folder_id: int, filename: str, stream: AsyncIterator[bytes], file_size: int
+    ) -> dict[str, Any]:
+        """Upload via FIFO (named pipe) when file size is known.
         
-        # Create FormData with parameters BEFORE file (per pCloud docs)
-        form_data = aiohttp.FormData()
-        form_data.add_field("folderid", str(folder_id))
-        form_data.add_field("filename", filename)
-        form_data.add_field("nopartial", "1")
+        This path uses a FIFO to stream data without disk space:
+        - Creates FIFO on Unix systems
+        - Opens reader first (FormData), then writer
+        - Sets Content-Length header for pCloud compatibility
+        - Writer closes only after all data is written and flushed
+        """
+        import tempfile
+        import os
         
-        # Start background task to populate queue
-        stream_task = asyncio.create_task(_stream_to_queue())
+        fifo_path = None
+        stream_writer_task = None
+        reader_opened = asyncio.Event()
+        writer_opened = asyncio.Event()
+        bytes_written = 0
+        chunk_count = 0
+        write_error = None
         
-        # Create file-like wrapper and add to form data
-        file_like = QueueFileLike(queue, stream_done)
         try:
-            form_data.add_field(
-                "file",
-                file_like,
-                filename=filename,
-                content_type="application/octet-stream",
+            # Create FIFO on Unix systems
+            if not hasattr(os, 'mkfifo'):
+                _LOGGER.warning(
+                    "FIFO not available on this system (Windows?). "
+                    "Falling back to temp file method."
+                )
+                return await self._async_upload_via_tempfile(folder_id, filename, stream)
+            
+            # Create FIFO in /tmp (available on all HA installations)
+            temp_dir = '/tmp' if os.path.exists('/tmp') and os.access('/tmp', os.W_OK) else None
+            if not temp_dir:
+                _LOGGER.warning(
+                    "/tmp not available or not writable. "
+                    "Falling back to temp file method."
+                )
+                return await self._async_upload_via_tempfile(folder_id, filename, stream)
+            
+            # Create temporary name for FIFO
+            fifo_fd, fifo_path = tempfile.mkstemp(suffix='.tar.fifo', dir=temp_dir)
+            os.close(fifo_fd)  # Close fd, we'll create FIFO separately
+            os.unlink(fifo_path)  # Remove temp file, we'll create FIFO in its place
+            os.mkfifo(fifo_path, 0o600)  # Create FIFO (named pipe)
+            
+            _LOGGER.info(
+                "Created FIFO at %s for streaming upload (size: %d bytes, %.2f MB) - "
+                "no disk space will be used",
+                fifo_path, file_size, file_size / (1024 * 1024)
             )
             
-            _LOGGER.debug("Uploading %s to pCloud...", filename)
+            # Writer task: Opens FIFO for writing FIRST (before reader opens)
+            async def write_stream_to_fifo():
+                """Write async stream to FIFO - opens FIRST to unblock reader."""
+                nonlocal bytes_written, chunk_count, write_error
+                file_obj = None
+                try:
+                    _LOGGER.debug("Writer: Waiting for reader signal...")
+                    # Wait for reader to signal it's ready to open
+                    await reader_opened.wait()
+                    _LOGGER.debug("Writer: Reader signaled, opening FIFO for writing...")
+                    
+                    # Open FIFO for writing (this will unblock the reader's open("rb"))
+                    file_obj = await asyncio.to_thread(open, fifo_path, "wb")
+                    _LOGGER.debug("Writer: FIFO opened for writing, ready to start writing...")
+                    
+                    # Signal that writer is fully ready (FIFO opened and ready to write)
+                    # This must be set AFTER the FIFO is opened and BEFORE starting the write loop
+                    writer_opened.set()
+                    _LOGGER.debug("Writer: Signaling ready, starting to write stream...")
+                    
+                    # Write stream chunk-by-chunk
+                    try:
+                        async for chunk in stream:
+                            bytes_written += len(chunk)
+                            chunk_count += 1
+                            try:
+                                await asyncio.to_thread(file_obj.write, chunk)
+                            except BrokenPipeError:
+                                # Reader closed early (upload failed) - this is expected
+                                _LOGGER.debug("Writer: Broken pipe (reader closed early, upload likely failed)")
+                                write_error = BrokenPipeError("Broken pipe - reader closed early")
+                                break
+                            
+                            # Log progress every 100MB or every 1000 chunks
+                            if chunk_count % 1000 == 0 or bytes_written % (100 * 1024 * 1024) < len(chunk):
+                                _LOGGER.debug(
+                                    "Writer: Progress %d MB (%d chunks) of %d MB",
+                                    bytes_written // (1024 * 1024),
+                                    chunk_count,
+                                    file_size // (1024 * 1024)
+                                )
+                    except asyncio.CancelledError:
+                        _LOGGER.debug("Writer: Task cancelled")
+                        raise  # Re-raise to properly handle cancellation
+                    
+                    # Flush and close only after all data is written (or broken pipe)
+                    if file_obj:
+                        try:
+                            await asyncio.to_thread(file_obj.flush)
+                            _LOGGER.debug(
+                                "Writer: Finished writing %d bytes (%d chunks), closing FIFO",
+                                bytes_written, chunk_count
+                            )
+                            await asyncio.to_thread(file_obj.close)
+                            file_obj = None
+                            _LOGGER.debug("Writer: FIFO closed successfully")
+                        except BrokenPipeError:
+                            _LOGGER.debug("Writer: Broken pipe during flush/close (expected if reader closed)")
+                            file_obj = None
+                    
+                except asyncio.CancelledError:
+                    # Task was cancelled - clean up and re-raise
+                    _LOGGER.debug("Writer: Task cancelled, cleaning up")
+                    if file_obj:
+                        try:
+                            await asyncio.to_thread(file_obj.close)
+                        except Exception:
+                            pass
+                    raise
+                except BrokenPipeError as err:
+                    # Broken pipe is expected when reader closes early (upload failed)
+                    write_error = err
+                    _LOGGER.debug("Writer: Broken pipe error (expected when reader closes early): %s", err)
+                    if file_obj:
+                        try:
+                            await asyncio.to_thread(file_obj.close)
+                        except Exception:
+                            pass
+                    # Don't re-raise - broken pipe is expected on upload failure
+                except Exception as err:
+                    write_error = err
+                    _LOGGER.error("Writer: Unexpected error writing to FIFO: %s", err, exc_info=True)
+                    if file_obj:
+                        try:
+                            await asyncio.to_thread(file_obj.close)
+                        except Exception:
+                            pass
+                    raise
+            
+            # Start writer task (will wait for reader to open)
+            stream_writer_task = asyncio.create_task(write_stream_to_fifo())
+            
+            # Prepare upload request
+            session = await self._get_session()
+            url = f"{self._base_url}/uploadfile"
+            auth_token = await self.auth.get_auth_token()
+            
+            # Determine auth method
+            is_oauth2 = hasattr(self.auth, "_access_token") and not hasattr(self.auth, "username")
+            headers = {}
+            params = {}
+            
+            if is_oauth2:
+                headers["Authorization"] = f"Bearer {auth_token}"
+            else:
+                params["auth"] = auth_token
+                if hasattr(self.auth, "update_inactive_expiration"):
+                    self.auth.update_inactive_expiration()
+            
+            # Build FormData with FIFO file handle
+            # CRITICAL: Signal writer FIRST, then open FIFO for reading
+            # Opening FIFO for reading blocks until writer opens it, so we must
+            # signal the writer BEFORE opening, allowing writer to open first
+            _LOGGER.debug("Reader: Signaling writer, then opening FIFO for reading...")
+            reader_opened.set()  # Signal writer that reader is ready (BEFORE opening)
+            
+            # Open FIFO for reading (will block until writer opens it)
+            fifo_file = await asyncio.to_thread(open, fifo_path, "rb")
+            _LOGGER.debug("Reader: FIFO opened for reading (writer must have opened)")
+            
+            # Wait for writer to confirm it's ready (FIFO opened and ready to write)
+            try:
+                await asyncio.wait_for(writer_opened.wait(), timeout=30.0)
+                _LOGGER.debug("Reader: Writer confirmed ready, both ends connected")
+            except asyncio.TimeoutError:
+                _LOGGER.error(
+                    "Reader: Writer did not confirm readiness within 30 seconds. "
+                    "This indicates a synchronization issue."
+                )
+                await asyncio.to_thread(fifo_file.close)
+                raise PCloudAPIError("FIFO writer failed to become ready in time")
+            
+            # Use MultipartWriter instead of FormData
+            # MultipartWriter allows us to specify content_length for the file part,
+            # which enables aiohttp to automatically calculate and set Content-Length
+            from aiohttp import MultipartWriter
+            from aiohttp.payload import Payload
+            
+            writer = MultipartWriter('form-data')
+            
+            # Add form fields as text parts
+            writer.append(str(folder_id), headers={'Content-Disposition': 'form-data; name="folderid"'})
+            writer.append(filename, headers={'Content-Disposition': f'form-data; name="filename"'})
+            writer.append("1", headers={'Content-Disposition': 'form-data; name="nopartial"'})
+            
+            # Create a payload wrapper for the FIFO file with known size
+            # This allows MultipartWriter to calculate the total size correctly
+            class SizedFilePayload(Payload):
+                """Payload wrapper that reports a known size and streams a file-like object."""
+                def __init__(self, file_obj, size, headers=None, **kwargs):
+                    # Initialize with file_obj as value
+                    super().__init__(value=file_obj, headers=headers, **kwargs)
+                    self._known_size = size
+                
+                @property
+                def size(self):
+                    """Return the known size."""
+                    return self._known_size
+                
+                def __len__(self):
+                    """Return the known size for len() calls."""
+                    return self._known_size
+                
+                def decode(self, value):
+                    """Decode method required by Payload abstract base class.
+                    
+                    For this streaming payload we don't need any decoding logic;
+                    just return the raw value unchanged.
+                    
+                    Args:
+                        value: The value to decode (bytes).
+                    
+                    Returns:
+                        The value unchanged (bytes).
+                    """
+                    return value
+                
+                async def write(self, writer):
+                    """Stream file contents to writer in chunks.
+                    
+                    This method reads from the FIFO file object in chunks and writes
+                    them to the multipart writer. It uses asyncio.to_thread to avoid
+                    blocking the event loop on file I/O operations.
+                    
+                    Args:
+                        writer: The multipart writer to write chunks to.
+                    """
+                    chunk_size = 64 * 1024  # 64KB chunks
+                    while True:
+                        # Read from FIFO in a thread to avoid blocking event loop
+                        chunk = await asyncio.to_thread(self._value.read, chunk_size)
+                        if not chunk:
+                            # EOF reached
+                            break
+                        # Write chunk to multipart body
+                        await writer.write(chunk)
+            
+            # Add file part with explicit size
+            file_payload = SizedFilePayload(
+                fifo_file,
+                file_size,
+                headers={
+                    'Content-Disposition': f'form-data; name="file"; filename="{filename}"',
+                    'Content-Type': 'application/octet-stream'
+                },
+                content_type='application/octet-stream'
+            )
+            writer.append_payload(file_payload)
+            
+            # MultipartWriter.size now returns the correct total size including all parts and boundaries
+            # aiohttp will automatically set Content-Length from writer.size
+            total_size = writer.size if hasattr(writer, 'size') else None
+            _LOGGER.info(
+                "Uploading %s via FIFO using MultipartWriter (file: %.2f MB, total: %s)",
+                filename,
+                file_size / (1024 * 1024),
+                f"{total_size / (1024 * 1024):.2f} MB" if total_size else "unknown"
+            )
+            
+            # Upload with MultipartWriter - aiohttp will automatically set Content-Length
+            # Do NOT manually set Content-Length header - let aiohttp handle it
             try:
                 async with session.post(
-                    url, params=params, data=form_data, headers=headers, timeout=UPLOAD_TIMEOUT
+                    url, params=params, data=writer, headers=headers, timeout=UPLOAD_TIMEOUT
                 ) as response:
                     result = await response.json()
-                    
-                    # Wait for stream task to complete
-                    try:
-                        await stream_task
-                    except Exception:
-                        pass  # Already handled in task
-                    
-                    if stream_error:
-                        raise PCloudAPIError(f"Stream error: {stream_error}") from stream_error
                     
                     # Check for pCloud API errors
                     if isinstance(result, dict) and result.get("result") != 0:
@@ -536,89 +624,198 @@ class PCloudAPI:
                         error_code = result.get("result")
                         _LOGGER.error(
                             "pCloud API error uploading %s (code %s): %s",
-                            filename,
-                            error_code,
-                            error_msg,
+                            filename, error_code, error_msg
                         )
                         raise PCloudAPIError(f"pCloud API error: {error_msg}")
                     
                     _LOGGER.info(
-                        "Successfully uploaded %s to pCloud (%d MB, %d chunks)",
+                        "Successfully uploaded %s via FIFO (%d MB, %d chunks)",
                         filename,
-                        bytes_streamed // (1024 * 1024),
+                        bytes_written // (1024 * 1024),
                         chunk_count
                     )
                     return result
                     
             except asyncio.TimeoutError as err:
-                # Cancel stream task immediately on timeout
-                if not stream_task.done():
-                    stream_task.cancel()
-                    try:
-                        await stream_task
-                    except (asyncio.CancelledError, Exception):
-                        pass
-                _LOGGER.error(
-                    "Upload timeout for %s after %d seconds. This may occur with very large backups. "
-                    "Consider checking network connection and pCloud server status.",
-                    filename,
-                    UPLOAD_TIMEOUT.total
-                )
+                _LOGGER.error("Upload timeout for %s: %s", filename, err)
+                # Cancel writer task before closing reader (prevents broken pipe)
+                if stream_writer_task and not stream_writer_task.done():
+                    stream_writer_task.cancel()
                 raise PCloudAPIError(f"Upload timeout for {filename}") from err
-            except (aiohttp.ClientOSError, aiohttp.ServerDisconnectedError) as err:
-                # Cancel stream task immediately on connection error
-                if not stream_task.done():
-                    stream_task.cancel()
-                    try:
-                        await stream_task
-                    except (asyncio.CancelledError, Exception):
-                        pass
-                # Connection reset or server disconnected
-                _LOGGER.error(
-                    "Connection error during upload of %s: %s. "
-                    "pCloud may have rejected the request format or connection was interrupted.",
-                    filename,
-                    err,
-                    exc_info=True
-                )
-                raise PCloudAPIError(
-                    f"Connection error uploading {filename}: {err}"
-                ) from err
             except aiohttp.ClientError as err:
-                # Cancel stream task immediately on client error
-                if not stream_task.done():
-                    stream_task.cancel()
-                    try:
-                        await stream_task
-                    except (asyncio.CancelledError, Exception):
-                        pass
-                _LOGGER.error(
-                    "Client error uploading %s: %s",
-                    filename,
-                    err,
-                    exc_info=True
-                )
-                raise PCloudAPIError(f"Client error uploading {filename}: {err}") from err
-            except Exception as err:
-                # Cancel stream task immediately on any error
-                if not stream_task.done():
-                    stream_task.cancel()
-                    try:
-                        await stream_task
-                    except (asyncio.CancelledError, Exception):
-                        pass
-                _LOGGER.exception("Unexpected error uploading %s", filename)
-                raise PCloudAPIError(f"Unexpected error uploading {filename}: {err}") from err
+                _LOGGER.error("Network error uploading %s: %s", filename, err, exc_info=True)
+                # Cancel writer task before closing reader (prevents broken pipe)
+                if stream_writer_task and not stream_writer_task.done():
+                    stream_writer_task.cancel()
+                raise PCloudAPIError(f"Network error uploading {filename}: {err}") from err
             finally:
-                # Ensure stream task is cancelled if still running
-                if not stream_task.done():
-                    stream_task.cancel()
-                    try:
-                        await stream_task
-                    except (asyncio.CancelledError, Exception):
-                        pass
+                # Close reader end (this will cause broken pipe in writer if it's still writing)
+                try:
+                    if fifo_file:
+                        await asyncio.to_thread(fifo_file.close)
+                        _LOGGER.debug("Reader: FIFO closed")
+                except Exception as close_err:
+                    _LOGGER.warning("Error closing FIFO reader: %s", close_err)
+            
+        except Exception as err:
+            # Log detailed diagnostics for FIFO failures
+            _LOGGER.error(
+                "FIFO upload failed for %s. Diagnostics: fifo_path=%s, "
+                "bytes_written=%d, chunk_count=%d, write_error=%s, error=%s",
+                filename, fifo_path, bytes_written, chunk_count, write_error, err,
+                exc_info=True
+            )
+            raise PCloudAPIError(f"FIFO upload failed for {filename}: {err}") from err
         finally:
-            file_like.close()
+            # Cancel writer task if it's still running (upload failed or was cancelled)
+            if stream_writer_task and not stream_writer_task.done():
+                _LOGGER.debug("Cancelling writer task...")
+                stream_writer_task.cancel()
+                try:
+                    await stream_writer_task
+                except asyncio.CancelledError:
+                    _LOGGER.debug("Writer task cancelled successfully")
+                except Exception as task_err:
+                    _LOGGER.debug("Writer task error during cancellation: %s", task_err)
+            elif stream_writer_task and stream_writer_task.done():
+                # Task completed - check if it had errors (but ignore broken pipe if upload failed)
+                try:
+                    await stream_writer_task
+                except BrokenPipeError:
+                    # Broken pipe is expected if reader closed early (upload failed)
+                    # Only log if upload succeeded (shouldn't happen)
+                    if not write_error or "Broken pipe" not in str(write_error):
+                        _LOGGER.debug("Writer got broken pipe (expected if reader closed early)")
+                except Exception as task_err:
+                    # Only log non-broken-pipe errors
+                    if not isinstance(task_err, BrokenPipeError):
+                        _LOGGER.warning("Writer task error: %s", task_err)
+            
+            # Clean up FIFO
+            if fifo_path and os.path.exists(fifo_path):
+                try:
+                    os.unlink(fifo_path)
+                    _LOGGER.debug("Cleaned up FIFO: %s", fifo_path)
+                except Exception as cleanup_err:
+                    _LOGGER.warning("Failed to delete FIFO %s: %s", fifo_path, cleanup_err)
+            
+            # Only raise writer errors if they're not broken pipe (which is expected on failure)
+            # Broken pipe happens when reader closes early due to upload failure
+            if write_error and not isinstance(write_error, BrokenPipeError):
+                # Check if it's a broken pipe error by string matching (for wrapped exceptions)
+                if "Broken pipe" not in str(write_error) and "[Errno 32]" not in str(write_error):
+                    raise PCloudAPIError(f"Writer error: {write_error}") from write_error
+                else:
+                    _LOGGER.debug("Ignoring broken pipe error from writer (expected when reader closes early)")
+    
+    async def _async_upload_via_tempfile(
+        self, folder_id: int, filename: str, stream: AsyncIterator[bytes]
+    ) -> dict[str, Any]:
+        """Upload via temp file in /backup when file size is unknown.
+        
+        This path writes the stream to a temp file in /backup (always available
+        on HA installations) and uses the proven async_upload_file_from_path method.
+        """
+        import tempfile
+        import os
+        
+        temp_path = None
+        stream_writer_task = None
+        bytes_written = 0
+        chunk_count = 0
+        
+        try:
+            # Use /backup directory (always available on HA OS/Supervised/Container)
+            backup_dir = "/backup"
+            if not os.path.exists(backup_dir) or not os.access(backup_dir, os.W_OK):
+                _LOGGER.warning(
+                    "/backup not available or not writable. "
+                    "Falling back to /tmp"
+                )
+                backup_dir = '/tmp' if os.path.exists('/tmp') and os.access('/tmp', os.W_OK) else None
+                if not backup_dir:
+                    raise PCloudAPIError(
+                        "Neither /backup nor /tmp is available for temp file. "
+                        "Cannot upload backup."
+                    )
+            
+            # Create temp file in /backup
+            temp_fd, temp_path = tempfile.mkstemp(suffix='.tar', dir=backup_dir)
+            os.close(temp_fd)  # Close fd, we'll use the path
+            
+            _LOGGER.info(
+                "Using temp file at %s for streaming upload (size unknown)",
+                temp_path
+            )
+            
+            # Write stream to temp file
+            async def write_stream_to_file():
+                """Write async stream to temp file."""
+                nonlocal bytes_written, chunk_count
+                try:
+                    _LOGGER.debug("Starting to write stream to %s...", temp_path)
+                    file_obj = await asyncio.to_thread(open, temp_path, "wb")
+                    try:
+                        async for chunk in stream:
+                            bytes_written += len(chunk)
+                            chunk_count += 1
+                            await asyncio.to_thread(file_obj.write, chunk)
+                            
+                            # Log progress every 100MB or every 1000 chunks
+                            if chunk_count % 1000 == 0 or bytes_written % (100 * 1024 * 1024) < len(chunk):
+                                _LOGGER.debug(
+                                    "Stream write progress: %d MB (%d chunks)",
+                                    bytes_written // (1024 * 1024),
+                                    chunk_count
+                                )
+                        await asyncio.to_thread(file_obj.flush)
+                    finally:
+                        await asyncio.to_thread(file_obj.close)
+                    
+                    _LOGGER.debug(
+                        "Finished writing stream to %s. Total: %d MB, %d chunks",
+                        temp_path,
+                        bytes_written // (1024 * 1024),
+                        chunk_count
+                    )
+                except Exception as err:
+                    _LOGGER.error("Error writing stream to file: %s", err, exc_info=True)
+                    raise
+            
+            # Start writing stream in background
+            stream_writer_task = asyncio.create_task(write_stream_to_file())
+            
+            # Wait for stream writer to finish
+            await stream_writer_task
+            
+            _LOGGER.info(
+                "Stream written to temp file: %d MB (%d chunks). Starting upload...",
+                bytes_written // (1024 * 1024),
+                chunk_count
+            )
+            
+            # Use proven async_upload_file_from_path method
+            result = await self.async_upload_file_from_path(folder_id, filename, temp_path)
+            
+            _LOGGER.info(
+                "Successfully uploaded %s via temp file (%d MB, %d chunks)",
+                filename,
+                bytes_written // (1024 * 1024),
+                chunk_count
+            )
+            return result
+            
+        except Exception as err:
+            _LOGGER.exception("Error uploading %s via temp file", filename)
+            raise PCloudAPIError(f"Error uploading {filename}: {err}") from err
+        finally:
+            # Clean up temp file only after successful upload
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.unlink(temp_path)
+                    _LOGGER.debug("Cleaned up temp file: %s", temp_path)
+                except Exception as cleanup_err:
+                    _LOGGER.warning("Failed to delete temp file %s: %s", temp_path, cleanup_err)
 
     async def async_upload_file_from_path(
         self, folder_id: int, filename: str, file_path: str

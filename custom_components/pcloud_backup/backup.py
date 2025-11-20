@@ -430,23 +430,29 @@ class PCloudBackupAgent(BackupAgent):
                             cleanup_err,
                         )
 
-            # Stream backup directly from Home Assistant to pCloud without using disk space
-            # This avoids the "No space left on device" error for large backups
-            _LOGGER.info("Starting upload of backup %s to pCloud (streaming directly, no temp file)", backup_name)
+            # Stream backup directly from Home Assistant to pCloud
+            # Uses dual-path strategy: FIFO if size known, temp file in /backup if unknown
+            _LOGGER.info("Starting upload of backup %s to pCloud", backup_name)
             
             stream = await open_stream()
             backup_metadata_size = getattr(backup, "size", 0) or 0
             
             if backup_metadata_size > 0:
                 _LOGGER.info(
-                    "Backup metadata reports size: %d bytes (%.2f MB)",
+                    "Backup metadata reports size: %d bytes (%.2f MB) - will use FIFO path",
                     backup_metadata_size,
                     backup_metadata_size / (1024 * 1024),
                 )
+            else:
+                _LOGGER.info(
+                    "Backup size unknown - will use temp file in /backup directory"
+                )
             
             # Stream directly from backup iterator to pCloud
-            # This uses minimal memory (only current chunk) and no disk space
-            await self.api.async_upload_file_from_stream(folder_id, backup_name, stream)
+            # Pass file_size to enable FIFO path when size is known
+            await self.api.async_upload_file_from_stream(
+                folder_id, backup_name, stream, file_size=backup_metadata_size if backup_metadata_size > 0 else None
+            )
 
             # Upload metadata so we can faithfully reconstruct the AgentBackup
             backup_dict = backup.as_dict()
