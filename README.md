@@ -133,6 +133,8 @@ All backups (both local and pCloud) are displayed in **Settings** → **System**
 3. Click the **three dots menu** next to the backup
 4. Select **Restore**
 
+> **Note:** On some Home Assistant installations (particularly Unraid Docker), remote restore directly from pCloud may fail with an error like `OSError: [Errno 39] Directory not empty: '/config/tmp_backups'`. This is due to Home Assistant's behavior on certain platforms. If you encounter this issue, see the [Troubleshooting](#restore-issues) section for a workaround.
+
 ## Requirements
 
 - Home Assistant 2025.1 or later
@@ -177,6 +179,33 @@ The integration follows pCloud's OAuth2 flow and ensures your credentials remain
 - Check network connectivity
 - Verify the backup folder path is accessible
 - Check Home Assistant logs for specific API error messages
+
+### Restore Issues
+
+#### Remote Restore Fails on Some Installations
+
+On some Home Assistant installations (particularly Unraid Docker), remote restore directly from pCloud may fail with an error like:
+```
+OSError: [Errno 39] Directory not empty: '/config/tmp_backups'
+```
+
+This is a known issue related to Home Assistant's behavior on certain platforms and how it manages temporary backup files during the restore process.
+
+**Workaround:** If you encounter this issue, you can restore backups using the following method:
+
+1. **Download the backup directly from pCloud:**
+   - Log in to your pCloud account via web browser
+   - Navigate to your backup folder (default: `/HomeAssistant/Backups`)
+   - Download the `.tar` backup file to your computer
+
+2. **Upload and restore in Home Assistant:**
+   - Go to **Settings** → **System** → **Backups** in Home Assistant
+   - Click the **three dots menu** (⋮) in the top right corner
+   - Select **Upload Backup**
+   - Choose the downloaded `.tar` file from your computer
+   - Click **Restore** on the uploaded backup
+
+> ⚠️ **Important:** This workaround requires your **Home Assistant Backup encryption key**. Make sure you have saved your backup encryption key before attempting to restore. Without the correct encryption key, you will not be able to restore the backup.
 
 ## Development
 
