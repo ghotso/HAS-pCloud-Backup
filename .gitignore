@@ -64,3 +64,5 @@ build/
 
 # pCloud Backup
 zip-releases/
+example/
+ha-dev-data/

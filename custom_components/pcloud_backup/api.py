@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from collections.abc import AsyncIterator
 from datetime import datetime
 from email.utils import parsedate_to_datetime
@@ -27,7 +28,12 @@ STANDARD_TIMEOUT = aiohttp.ClientTimeout(connect=30, total=120)  # 2 minutes for
 
 
 class PCloudAPIError(Exception):
-    """Base exception for pCloud API errors."""
+    """Base exception for pCloud API errors.
+    
+    Note: This is kept separate from BackupAgentError to allow it to be used
+    in non-backup contexts. It will be wrapped in BackupAgentError when raised
+    from backup operations.
+    """
 
     pass
 
@@ -999,26 +1005,35 @@ class PCloudAPI:
             
         Yields:
             bytes: Chunks of file data
+            
+        Note:
+            Uses async context manager to ensure response is properly closed
+            when iterator is exhausted or closed early, allowing HA to clean
+            up files in /config/tmp_backups.
         """
         download_link = await self.async_get_file_link(file_id)
         session = await self._get_session()
         
-        # Download links from pCloud don't require auth token
-        try:
-            async with session.get(download_link, timeout=DOWNLOAD_TIMEOUT) as response:
-                if response.status != 200:
-                    raise PCloudAPIError(f"Download failed with status {response.status}")
-                
-                # Stream the response in chunks
-                async for chunk in response.content.iter_chunked(8192):  # 8KB chunks
+        async with session.get(
+            download_link,
+            timeout=DOWNLOAD_TIMEOUT,
+            allow_redirects=True
+        ) as response:
+            if response.status != 200:
+                raise PCloudAPIError(f"Download failed with status {response.status}")
+            
+            try:
+                async for chunk in response.content.iter_chunked(1024):
                     yield chunk
-                    
-        except asyncio.TimeoutError as err:
-            _LOGGER.error("Download timeout for file %d: %s", file_id, err)
-            raise PCloudAPIError(f"Download timeout for file {file_id}") from err
-        except aiohttp.ClientError as err:
-            _LOGGER.error("Network error downloading file %d: %s", file_id, err)
-            raise PCloudAPIError(f"Network error downloading file {file_id}: {err}") from err
+            finally:
+                # CRITICAL: Explicitly release response immediately when generator exits
+                # This ensures HA can close file handles in /config/tmp_backups
+                # OneDrive's SDK handles this automatically, but we need to do it explicitly
+                try:
+                    if not response.closed:
+                        response.release()
+                except Exception:
+                    pass
 
     async def async_download_file_to_path(self, file_id: int, file_path: str) -> None:
         """Download a large file from pCloud and write it to disk using streaming.
@@ -1053,6 +1068,9 @@ class PCloudAPI:
                             )
                     
                     await asyncio.to_thread(file_obj.flush)
+                    # Ensure file is synced to disk before closing
+                    # This is critical to ensure the file is complete before reading
+                    await asyncio.to_thread(os.fsync, file_obj.fileno())
                     _LOGGER.info(
                         "Successfully downloaded file %d (%d MB) to %s",
                         file_id,
@@ -1061,6 +1079,19 @@ class PCloudAPI:
                     )
                 finally:
                     await asyncio.to_thread(file_obj.close)
+                    # Small delay to ensure file handle is fully closed and synced
+                    await asyncio.sleep(0.1)
+                    
+                # Verify downloaded file size matches what we downloaded
+                final_stat = await asyncio.to_thread(os.stat, file_path)
+                if bytes_downloaded != final_stat.st_size:
+                    _LOGGER.error(
+                        "File size mismatch after download: downloaded %d bytes, file size is %d bytes",
+                        bytes_downloaded, final_stat.st_size
+                    )
+                    raise PCloudAPIError(
+                        f"Download incomplete: wrote {bytes_downloaded} bytes but file size is {final_stat.st_size} bytes"
+                    )
                     
         except asyncio.TimeoutError as err:
             _LOGGER.error("Download timeout for file %d after %d seconds", file_id, DOWNLOAD_TIMEOUT.total)

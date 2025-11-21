@@ -1,14 +1,23 @@
 """Backup agent implementation for pCloud."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import os
+import tempfile
 from collections.abc import AsyncIterator, Callable, Coroutine
 from pathlib import Path
 from urllib.parse import unquote
 from typing import Any
 
-from homeassistant.components.backup import AgentBackup, BackupAgent, suggested_filename
+from homeassistant.components.backup import (
+    AgentBackup,
+    BackupAgent,
+    BackupAgentError,
+    BackupNotFound,
+    suggested_filename,
+)
 from homeassistant.core import HomeAssistant, callback
 
 from .api import PCloudAPI, PCloudAPIError
@@ -65,8 +74,10 @@ def async_register_backup_agents_listener(
     return remove_listener
 
 
-class BackupNotFound(Exception):
-    """Raised when a backup is not found."""
+class PCloudBackupError(BackupAgentError):
+    """Base exception for pCloud backup errors."""
+
+    pass
 
 
 class PCloudBackupAgent(BackupAgent):
@@ -309,7 +320,7 @@ class PCloudBackupAgent(BackupAgent):
             # Get API from hass data
             api = self.hass.data.get(DOMAIN, {}).get(self.config_entry_id)
             if api is None:
-                raise RuntimeError("pCloud API not initialized")
+                raise PCloudBackupError("pCloud API not initialized")
             self._api = api
         return self._api
 
@@ -325,7 +336,7 @@ class PCloudBackupAgent(BackupAgent):
             return backup_name_or_id.split(":", 1)[1]
         return backup_name_or_id
 
-    async def async_get_backup(self, backup_name: str) -> AgentBackup | None:
+    async def async_get_backup(self, backup_name: str, **kwargs: Any) -> AgentBackup | None:
         """Get backup information by name."""
         try:
             config_entry = self.hass.config_entries.async_get_entry(self.config_entry_id)
@@ -358,13 +369,13 @@ class PCloudBackupAgent(BackupAgent):
             return None
 
         except PCloudAPIError as err:
-            _LOGGER.error("Failed to get backup: %s", err)
+            _LOGGER.error("Failed to get backup: %s", err, exc_info=True)
             return None
         except Exception as err:
             _LOGGER.exception("Unexpected error getting backup")
             return None
 
-    async def async_list_backups(self) -> list[AgentBackup]:
+    async def async_list_backups(self, **kwargs: Any) -> list[AgentBackup]:
         """List all backups in pCloud."""
         try:
             config_entry = self.hass.config_entries.async_get_entry(self.config_entry_id)
@@ -409,7 +420,7 @@ class PCloudBackupAgent(BackupAgent):
         try:
             config_entry = self.hass.config_entries.async_get_entry(self.config_entry_id)
             if config_entry is None:
-                raise RuntimeError("Config entry not found")
+                raise PCloudBackupError("Config entry not found")
 
             options = config_entry.options
             backup_folder = options.get(CONF_BACKUP_FOLDER, DEFAULT_BACKUP_FOLDER)
@@ -509,14 +520,14 @@ class PCloudBackupAgent(BackupAgent):
             _LOGGER.info("Successfully uploaded backup %s", backup_name)
 
         except PCloudAPIError as err:
-            _LOGGER.error("Failed to upload backup: %s", err)
-            raise
+            _LOGGER.error("Failed to upload backup: %s", err, exc_info=True)
+            raise PCloudBackupError(f"Failed to upload backup: {err}") from err
         except Exception as err:
             _LOGGER.exception("Unexpected error uploading backup")
-            raise
+            raise PCloudBackupError(f"Unexpected error uploading backup: {err}") from err
 
     async def async_download_backup(
-        self, backup_id: str
+        self, backup_id: str, **kwargs: Any
     ) -> AsyncIterator[bytes]:
         """Download a backup from pCloud and return as an async stream.
         
@@ -524,16 +535,31 @@ class PCloudBackupAgent(BackupAgent):
         checks and actual downloads. It returns an async iterator that yields
         chunks of the backup file.
         
+        This implementation streams directly from pCloud to Home Assistant,
+        similar to how the OneDrive integration works. No temp files are used.
+        
         Args:
             backup_id: The backup ID (can be backup_id or backup name)
+            **kwargs: Additional keyword arguments that Home Assistant may pass,
+                     such as 'progress' callback or 'expected_size'
             
         Returns:
             AsyncIterator[bytes]: An async iterator that yields chunks of backup file data
         """
+        # Log the download request with any kwargs for debugging
+        if kwargs:
+            _LOGGER.info(
+                "Starting download of backup %s (kwargs: %s)",
+                backup_id,
+                {k: v for k, v in kwargs.items() if k != "progress"},  # Don't log callbacks
+            )
+        else:
+            _LOGGER.info("Starting download of backup %s", backup_id)
+        
         try:
             config_entry = self.hass.config_entries.async_get_entry(self.config_entry_id)
             if config_entry is None:
-                raise RuntimeError("Config entry not found")
+                raise PCloudBackupError("Config entry not found")
 
             options = config_entry.options
             backup_folder = options.get(CONF_BACKUP_FOLDER, DEFAULT_BACKUP_FOLDER)
@@ -554,33 +580,49 @@ class PCloudBackupAgent(BackupAgent):
                 metadata_key = derived_key
 
             if backup_file is None:
+                _LOGGER.warning("Backup %s not found in pCloud", backup_id)
                 raise BackupNotFound(f"Backup {backup_id} not found in pCloud")
 
             # Get file ID for download
             file_id = backup_file.get("fileid")
             if file_id is None:
+                _LOGGER.error("Backup %s has no file ID", backup_id)
                 raise BackupNotFound(f"Backup {backup_id} has no file ID")
 
-            _LOGGER.info("Downloading backup %s from pCloud (streaming)", backup_id)
-            # Return the async iterator directly from the API
-            # This is an async generator, which is an AsyncIterator
+            _LOGGER.debug(
+                "Downloading backup %s from pCloud file ID %s",
+                backup_id,
+                file_id,
+            )
+
+            # Return stream directly - exactly like OneDrive
+            # The async context manager in async_download_file_stream ensures proper cleanup
             return self.api.async_download_file_stream(file_id)
 
         except BackupNotFound:
+            # Re-raise BackupNotFound as-is (it's already a BackupAgentError subclass)
             raise
         except PCloudAPIError as err:
-            _LOGGER.error("Failed to download backup: %s", err)
-            raise BackupNotFound(f"Failed to download backup: {err}") from err
+            _LOGGER.error(
+                "pCloud API error downloading backup %s: %s",
+                backup_id,
+                err,
+                exc_info=True,
+            )
+            raise PCloudBackupError(f"Failed to download backup: {err}") from err
         except Exception as err:
-            _LOGGER.exception("Unexpected error downloading backup")
-            raise BackupNotFound(f"Unexpected error: {err}") from err
+            _LOGGER.exception(
+                "Unexpected error downloading backup %s",
+                backup_id,
+            )
+            raise PCloudBackupError(f"Unexpected error downloading backup: {err}") from err
 
-    async def async_delete_backup(self, backup_name: str) -> None:
+    async def async_delete_backup(self, backup_name: str, **kwargs: Any) -> None:
         """Delete a backup from pCloud."""
         try:
             config_entry = self.hass.config_entries.async_get_entry(self.config_entry_id)
             if config_entry is None:
-                raise RuntimeError("Config entry not found")
+                raise PCloudBackupError("Config entry not found")
 
             options = config_entry.options
             backup_folder = options.get(CONF_BACKUP_FOLDER, DEFAULT_BACKUP_FOLDER)
@@ -626,11 +668,15 @@ class PCloudBackupAgent(BackupAgent):
             _LOGGER.info("Successfully deleted backup %s", backup_name)
 
         except BackupNotFound:
+            # Re-raise BackupNotFound as-is (it's already a BackupAgentError subclass)
             raise
         except PCloudAPIError as err:
-            _LOGGER.error("Failed to delete backup: %s", err)
-            raise BackupNotFound(f"Failed to delete backup: {err}") from err
+            _LOGGER.error("Failed to delete backup: %s", err, exc_info=True)
+            raise PCloudBackupError(f"Failed to delete backup: {err}") from err
         except Exception as err:
             _LOGGER.exception("Unexpected error deleting backup")
-            raise BackupNotFound(f"Unexpected error: {err}") from err
+            raise PCloudBackupError(f"Unexpected error deleting backup: {err}") from err
+
+
+
 
