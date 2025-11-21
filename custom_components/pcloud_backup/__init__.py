@@ -3,12 +3,8 @@ from __future__ import annotations
 
 import logging
 
-from pathlib import Path
-
-from homeassistant.components import frontend
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.components.http import StaticPathConfig
 
 from .api import PCloudAPI
 from .auth import create_auth
@@ -21,37 +17,12 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-ICON_MODULE_URL = "/pcloud-backup/icon_patch.js"
-ICON_MODULE_NAME = "__icon_module_registered__"
-
 
 @callback
 def _notify_backup_agent_listeners(hass: HomeAssistant) -> None:
     """Notify backup agent listeners about changes."""
     for listener in hass.data.get(DATA_BACKUP_AGENT_LISTENERS, []):
         listener()
-
-
-async def _ensure_frontend_module(hass: HomeAssistant) -> None:
-    """Expose the frontend helper module exactly once."""
-    domain_data = hass.data.setdefault(DOMAIN, {})
-    if domain_data.get(ICON_MODULE_NAME):
-        return
-
-    source_path = Path(__file__).parent / "frontend" / "icon_patch.js"
-
-    await hass.http.async_register_static_paths(
-        [
-            StaticPathConfig(
-                ICON_MODULE_URL,
-                str(source_path),
-                cache_headers=False,
-            )
-        ]
-    )
-
-    frontend.add_extra_js_url(hass, ICON_MODULE_URL)
-    domain_data[ICON_MODULE_NAME] = True
 
 
 async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
@@ -101,8 +72,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Store API instance
     hass.data[DOMAIN][entry.entry_id] = api
     entry.runtime_data = api
-
-    await _ensure_frontend_module(hass)
 
     # Notify backup manager listeners that agents may have changed
     _notify_backup_agent_listeners(hass)
