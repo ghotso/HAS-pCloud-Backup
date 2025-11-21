@@ -50,6 +50,12 @@
       },
       "last_sync_status": {
         "name": "Letzter Sync-Status"
+      },
+      "free_space": {
+        "name": "Freier Speicherplatz"
+      },
+      "used_space": {
+        "name": "Verwendeter Speicherplatz"
       }
     }
   }

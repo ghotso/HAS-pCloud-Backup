@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.components.sensor import (
+    SensorDeviceClass,
     SensorEntity,
     SensorEntityDescription,
     SensorStateClass,
@@ -19,9 +20,11 @@ from homeassistant.util import dt as dt_util
 
 from .api import PCloudAPI, PCloudAPIError
 from .const import (
+    ATTR_FREE_SPACE,
     ATTR_LAST_REMOTE_BACKUP,
     ATTR_LAST_SYNC_STATUS,
     ATTR_REMOTE_BACKUP_COUNT,
+    ATTR_USED_SPACE,
     DOMAIN,
 )
 
@@ -45,6 +48,22 @@ SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
         key="last_sync_status",
         translation_key="last_sync_status",
         icon="mdi:sync",
+    ),
+    SensorEntityDescription(
+        key="free_space",
+        translation_key="free_space",
+        icon="mdi:cloud-outline",
+        device_class=SensorDeviceClass.DATA_SIZE,
+        native_unit_of_measurement="B",
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    SensorEntityDescription(
+        key="used_space",
+        translation_key="used_space",
+        icon="mdi:cloud-upload",
+        device_class=SensorDeviceClass.DATA_SIZE,
+        native_unit_of_measurement="B",
+        state_class=SensorStateClass.TOTAL,
     ),
 )
 
@@ -115,6 +134,25 @@ class PCloudBackupCoordinator(DataUpdateCoordinator):
                 _LOGGER.debug("No backups found")
                 last_backup_dt = None
 
+            # Calculate total used space by summing all backup sizes
+            total_used_space = sum(backup.size for backup in backups if backup.size)
+
+            # Fetch userinfo to get quota information
+            try:
+                userinfo = await self.api.async_get_userinfo()
+                quota = userinfo.get("quota", 0)
+                used_quota = userinfo.get("usedquota", 0)
+                free_space = max(0, quota - used_quota)
+                _LOGGER.debug(
+                    "Userinfo: quota=%d, used_quota=%d, free_space=%d",
+                    quota,
+                    used_quota,
+                    free_space,
+                )
+            except Exception as err:
+                _LOGGER.warning("Failed to fetch userinfo: %s", err)
+                free_space = None
+
             self._last_sync_status = "OK"
             self._last_sync_error = None
 
@@ -122,6 +160,8 @@ class PCloudBackupCoordinator(DataUpdateCoordinator):
                 ATTR_REMOTE_BACKUP_COUNT: len(backups),
                 ATTR_LAST_REMOTE_BACKUP: last_backup_dt.isoformat() if last_backup_dt else None,
                 ATTR_LAST_SYNC_STATUS: "OK",
+                ATTR_USED_SPACE: total_used_space,
+                ATTR_FREE_SPACE: free_space,
             }
             _LOGGER.debug("Sensor data: %s", result)
             return result
@@ -138,6 +178,8 @@ class PCloudBackupCoordinator(DataUpdateCoordinator):
                 if self.data
                 else None,
                 ATTR_LAST_SYNC_STATUS: "Failed",
+                ATTR_USED_SPACE: self.data.get(ATTR_USED_SPACE, 0) if self.data else 0,
+                ATTR_FREE_SPACE: self.data.get(ATTR_FREE_SPACE) if self.data else None,
             }
         except Exception as err:
             _LOGGER.exception("Unexpected error updating pCloud backup data")
@@ -151,6 +193,8 @@ class PCloudBackupCoordinator(DataUpdateCoordinator):
                 if self.data
                 else None,
                 ATTR_LAST_SYNC_STATUS: "Failed",
+                ATTR_USED_SPACE: self.data.get(ATTR_USED_SPACE, 0) if self.data else 0,
+                ATTR_FREE_SPACE: self.data.get(ATTR_FREE_SPACE) if self.data else None,
             }
 
 

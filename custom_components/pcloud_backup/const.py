@@ -37,6 +37,8 @@ CONF_BACKUP_FOLDER = "backup_folder"
 ATTR_REMOTE_BACKUP_COUNT = "remote_backup_count"
 ATTR_LAST_REMOTE_BACKUP = "last_remote_backup"
 ATTR_LAST_SYNC_STATUS = "last_sync_status"
+ATTR_FREE_SPACE = "free_space"
+ATTR_USED_SPACE = "used_space"
 
 # Backup agent listener storage key
 DATA_BACKUP_AGENT_LISTENERS: HassKey[list[Callable[[], None]]] = HassKey(

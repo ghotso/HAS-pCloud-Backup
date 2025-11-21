@@ -193,6 +193,11 @@ class PCloudAPI:
             _LOGGER.error("Connection test failed: %s", err)
             raise
 
+    async def async_get_userinfo(self) -> dict[str, Any]:
+        """Get user information including quota and used quota."""
+        result = await self._request("GET", "/userinfo")
+        return result
+
     async def async_get_folder_id(self, folder_path: str) -> int:
         """Get folder ID from path, creating if necessary."""
         # Start from root
