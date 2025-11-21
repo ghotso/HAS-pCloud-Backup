@@ -468,8 +468,8 @@ class PCloudAPI:
                     if file_obj:
                         try:
                             await asyncio.to_thread(file_obj.close)
-                        except Exception:
-                            pass
+                        except Exception as close_err:
+                            _LOGGER.debug("Writer: Error closing file during cancellation: %s", close_err)
                     raise
                 except BrokenPipeError as err:
                     # Broken pipe is expected when reader closes early (upload failed)
@@ -478,8 +478,8 @@ class PCloudAPI:
                     if file_obj:
                         try:
                             await asyncio.to_thread(file_obj.close)
-                        except Exception:
-                            pass
+                        except Exception as close_err:
+                            _LOGGER.debug("Writer: Error closing file after broken pipe: %s", close_err)
                     # Don't re-raise - broken pipe is expected on upload failure
                 except Exception as err:
                     write_error = err
@@ -487,8 +487,8 @@ class PCloudAPI:
                     if file_obj:
                         try:
                             await asyncio.to_thread(file_obj.close)
-                        except Exception:
-                            pass
+                        except Exception as close_err:
+                            _LOGGER.debug("Writer: Error closing file after error: %s", close_err)
                     raise
             
             # Start writer task (will wait for reader to open)
