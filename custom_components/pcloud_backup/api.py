@@ -376,12 +376,17 @@ class PCloudAPI:
                 )
                 return await self._async_upload_via_tempfile(folder_id, filename, stream)
             
-            # Create FIFO in /tmp (available on all HA installations)
-            temp_dir = '/tmp' if os.path.exists('/tmp') and os.access('/tmp', os.W_OK) else None
-            if not temp_dir:
+            # Create FIFO in system temp directory (secure, uses tempfile.gettempdir())
+            try:
+                temp_dir = tempfile.gettempdir()
+                # Verify temp directory is writable
+                if not os.access(temp_dir, os.W_OK):
+                    raise OSError(f"Temp directory {temp_dir} is not writable")
+            except (OSError, AttributeError) as err:
                 _LOGGER.warning(
-                    "/tmp not available or not writable. "
-                    "Falling back to temp file method."
+                    "System temp directory not available or not writable: %s. "
+                    "Falling back to temp file method.",
+                    err
                 )
                 return await self._async_upload_via_tempfile(folder_id, filename, stream)
             
@@ -736,12 +741,15 @@ class PCloudAPI:
             if not os.path.exists(backup_dir) or not os.access(backup_dir, os.W_OK):
                 _LOGGER.warning(
                     "/backup not available or not writable. "
-                    "Falling back to /tmp"
+                    "Falling back to system temp directory"
                 )
-                backup_dir = '/tmp' if os.path.exists('/tmp') and os.access('/tmp', os.W_OK) else None
-                if not backup_dir:
+                try:
+                    backup_dir = tempfile.gettempdir()
+                    if not os.access(backup_dir, os.W_OK):
+                        raise OSError(f"Temp directory {backup_dir} is not writable")
+                except (OSError, AttributeError):
                     raise PCloudAPIError(
-                        "Neither /backup nor /tmp is available for temp file. "
+                        "Neither /backup nor system temp directory is available for temp file. "
                         "Cannot upload backup."
                     )
             
