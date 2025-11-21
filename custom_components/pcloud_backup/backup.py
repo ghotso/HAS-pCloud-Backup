@@ -596,7 +596,8 @@ class PCloudBackupAgent(BackupAgent):
             )
 
             # Return stream directly - exactly like OneDrive
-            # The async context manager in async_download_file_stream ensures proper cleanup
+            # The response lifecycle is managed by async_download_file_stream
+            # Response stays open during the entire read, matching OneDrive's behavior
             return self.api.async_download_file_stream(file_id)
 
         except BackupNotFound:

@@ -1000,40 +1000,43 @@ class PCloudAPI:
         This method streams the file without loading it entirely into memory,
         making it suitable for large files.
         
+        The implementation follows the same pattern as OneDrive's download:
+        - Response is created once and kept open during the entire read
+        - Home Assistant controls the streaming lifecycle
+        - Response is only closed when the iterator finishes or is closed
+        
         Args:
             file_id: pCloud file ID to download
             
         Yields:
             bytes: Chunks of file data
-            
-        Note:
-            Uses async context manager to ensure response is properly closed
-            when iterator is exhausted or closed early, allowing HA to clean
-            up files in /config/tmp_backups.
         """
         download_link = await self.async_get_file_link(file_id)
         session = await self._get_session()
         
-        async with session.get(
+        # Get response WITHOUT async with - we manage lifecycle manually
+        # This matches OneDrive's pattern where the response stays open
+        # for the entire duration of Home Assistant's restore process
+        response = await session.get(
             download_link,
             timeout=DOWNLOAD_TIMEOUT,
             allow_redirects=True
-        ) as response:
-            if response.status != 200:
-                raise PCloudAPIError(f"Download failed with status {response.status}")
-            
-            try:
-                async for chunk in response.content.iter_chunked(1024):
-                    yield chunk
-            finally:
-                # CRITICAL: Explicitly release response immediately when generator exits
-                # This ensures HA can close file handles in /config/tmp_backups
-                # OneDrive's SDK handles this automatically, but we need to do it explicitly
-                try:
-                    if not response.closed:
-                        response.release()
-                except Exception:
-                    pass
+        )
+        
+        if response.status != 200:
+            response.close()
+            raise PCloudAPIError(f"Download failed with status {response.status}")
+        
+        try:
+            # Yield chunks - response stays open during iteration
+            # Home Assistant controls when iteration stops
+            async for chunk in response.content.iter_chunked(1024):
+                yield chunk
+        finally:
+            # Close response only when generator is exhausted or closed
+            # This happens when Home Assistant finishes reading the stream
+            if not response.closed:
+                response.close()
 
     async def async_download_file_to_path(self, file_id: int, file_path: str) -> None:
         """Download a large file from pCloud and write it to disk using streaming.
