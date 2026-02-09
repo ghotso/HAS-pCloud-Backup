@@ -109,6 +109,9 @@ The integration provides the following sensors:
 - `sensor.pcloud_remote_backup_count` - Number of backups stored in pCloud
 - `sensor.pcloud_last_remote_backup` - Timestamp of the last successful backup upload
 - `sensor.pcloud_last_sync_status` - Status of the last sync operation (OK/Failed)
+- `sensor.pcloud_free_space` - Free space available in your pCloud account (account-wide quota)
+- `sensor.pcloud_used_space_by_backups` - Storage used by your Home Assistant backups in the pCloud backup folder
+- `sensor.pcloud_account_used_space` - Total storage used across your entire pCloud account
 
 ## Usage
 
