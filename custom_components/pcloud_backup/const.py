@@ -37,6 +37,7 @@ CONF_BACKUP_FOLDER = "backup_folder"
 ATTR_REMOTE_BACKUP_COUNT = "remote_backup_count"
 ATTR_LAST_REMOTE_BACKUP = "last_remote_backup"
 ATTR_LAST_SYNC_STATUS = "last_sync_status"
+ATTR_ACCOUNT_USED_SPACE = "account_used_space"
 ATTR_FREE_SPACE = "free_space"
 ATTR_USED_SPACE = "used_space"
 

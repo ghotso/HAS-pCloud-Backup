@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "pCloud Backup Konfiguration",
-        "description": "Gib deine pCloud-Zugangsdaten ein und wähle dein Datacenter.",
+        "description": "Gib deine pCloud-Zugangsdaten ein und w\u00e4hle dein Datacenter.",
         "data": {
           "region": "Region",
           "username": "E-Mail",
@@ -20,9 +20,9 @@
       }
     },
     "error": {
-      "cannot_connect": "Verbindung zu pCloud fehlgeschlagen. Bitte Zugangsdaten prüfen und erneut versuchen.",
-      "invalid_auth": "Authentifizierung fehlgeschlagen. Bitte E-Mail und Passwort prüfen.",
-      "invalid_folder_path": "Ungültiger Ordnerpfad. Bitte den Pfad prüfen und erneut versuchen. Der Ordner wird erstellt, falls er nicht existiert.",
+      "cannot_connect": "Verbindung zu pCloud fehlgeschlagen. Bitte Zugangsdaten pr\u00fcfen und erneut versuchen.",
+      "invalid_auth": "Authentifizierung fehlgeschlagen. Bitte E-Mail und Passwort pr\u00fcfen.",
+      "invalid_folder_path": "Ung\u00fcltiger Ordnerpfad. Bitte den Pfad pr\u00fcfen und erneut versuchen. Der Ordner wird erstellt, falls er nicht existiert.",
       "unknown": "Unerwarteter Fehler: {error}"
     },
     "abort": {
@@ -54,10 +54,12 @@
       "free_space": {
         "name": "Freier Speicherplatz"
       },
-      "used_space": {
-        "name": "Verwendeter Speicherplatz"
+      "used_space_by_backups": {
+        "name": "Von Backups belegter Speicher"
+      },
+      "account_used_space": {
+        "name": "Kontoweiter Speicherverbrauch"
       }
     }
   }
 }
-

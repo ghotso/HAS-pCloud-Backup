@@ -54,10 +54,12 @@
       "free_space": {
         "name": "Free Space"
       },
-      "used_space": {
-        "name": "Used Space"
+      "used_space_by_backups": {
+        "name": "Used Space by Backups"
+      },
+      "account_used_space": {
+        "name": "Account Used Space"
       }
     }
   }
 }
-
