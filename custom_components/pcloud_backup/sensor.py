@@ -6,7 +6,6 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.components.sensor import (
-    SensorDeviceClass,
     SensorEntity,
     SensorEntityDescription,
     SensorStateClass,
@@ -31,6 +30,29 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# Binary units (1024) to match pCloud and common storage UIs (Windows, macOS, etc.)
+_DATA_SIZE_UNITS = ("B", "KiB", "MiB", "GiB", "TiB", "PiB")
+
+
+def _bytes_to_human_readable(value: int | float | None) -> tuple[float | None, str]:
+    """Convert byte value to human-readable (value, unit) using binary (1024) units."""
+    if value is None:
+        return (None, "B")
+    try:
+        value = int(float(value))
+    except (TypeError, ValueError):
+        return (None, "B")
+    if value < 0:
+        return (None, "B")
+    if value == 0:
+        return (0.0, "B")
+    for i, unit in enumerate(_DATA_SIZE_UNITS):
+        if value < 1024 ** (i + 1) or unit == _DATA_SIZE_UNITS[-1]:
+            divisor = 1024**i
+            return (round(value / divisor, 2), unit)
+    return (round(value / (1024 ** (len(_DATA_SIZE_UNITS) - 1)), 2), _DATA_SIZE_UNITS[-1])
+
+
 SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
     SensorEntityDescription(
         key="remote_backup_count",
@@ -54,27 +76,23 @@ SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
         key="free_space",
         translation_key="free_space",
         icon="mdi:cloud-outline",
-        device_class=SensorDeviceClass.DATA_SIZE,
-        native_unit_of_measurement="B",
         state_class=SensorStateClass.MEASUREMENT,
     ),
     SensorEntityDescription(
         key="used_space",
         translation_key="used_space_by_backups",
         icon="mdi:cloud-upload",
-        device_class=SensorDeviceClass.DATA_SIZE,
-        native_unit_of_measurement="B",
         state_class=SensorStateClass.TOTAL,
     ),
     SensorEntityDescription(
         key="account_used_space",
         translation_key="account_used_space",
         icon="mdi:cloud",
-        device_class=SensorDeviceClass.DATA_SIZE,
-        native_unit_of_measurement="B",
         state_class=SensorStateClass.TOTAL,
     ),
 )
+
+_SIZE_SENSOR_KEYS = ("free_space", "used_space", "account_used_space")
 
 
 async def async_setup_entry(
@@ -231,6 +249,29 @@ class PCloudBackupSensor(CoordinatorEntity, SensorEntity):
         super().__init__(coordinator)
         self.entity_description = description
         self._attr_unique_id = f"{entry.entry_id}_{description.key}"
+        # Cache for size sensors: (display_value, unit) so state write sees human-readable form
+        self._size_display_value: float | None = None
+        self._size_display_unit: str = "B"
+
+    async def async_added_to_hass(self) -> None:
+        """Populate size display cache from coordinator data so first state write is correct."""
+        await super().async_added_to_hass()
+        if self.entity_description.key in _SIZE_SENSOR_KEYS and self.coordinator.data is not None:
+            self._size_display_value, self._size_display_unit = self._size_display()
+
+    def _handle_coordinator_update(self) -> None:
+        """Cache human-readable value/unit for size sensors, then let parent write state."""
+        if self.entity_description.key in _SIZE_SENSOR_KEYS:
+            self._size_display_value, self._size_display_unit = self._size_display()
+        super()._handle_coordinator_update()
+
+    def _size_display(self) -> tuple[float | None, str]:
+        """Get human-readable (value, unit) for size sensors from coordinator data."""
+        if self.coordinator.data is None:
+            return (None, "B")
+        key = self.entity_description.key
+        raw = self.coordinator.data.get(key)
+        return _bytes_to_human_readable(raw)
 
     @property
     def native_value(self) -> StateType:
@@ -240,6 +281,13 @@ class PCloudBackupSensor(CoordinatorEntity, SensorEntity):
 
         key = self.entity_description.key
         value = self.coordinator.data.get(key)
+
+        if key in _SIZE_SENSOR_KEYS:
+            # Use cached display value after coordinator update; else compute from data (e.g. first load)
+            if self._size_display_value is not None:
+                return self._size_display_value
+            display_value, _ = _bytes_to_human_readable(value)
+            return display_value
 
         if key == "last_remote_backup" and value:
             # Convert ISO string to timestamp for device_class timestamp
@@ -252,6 +300,17 @@ class PCloudBackupSensor(CoordinatorEntity, SensorEntity):
                 return None
 
         return value
+
+    @property
+    def native_unit_of_measurement(self) -> str | None:
+        """Return the unit of the sensor; dynamic for size sensors."""
+        if self.entity_description.key in _SIZE_SENSOR_KEYS:
+            # Use cached unit when set (after coordinator update), else compute from data
+            if self.coordinator.data is not None:
+                _, unit = self._size_display()
+                return unit
+            return self._size_display_unit
+        return self.entity_description.native_unit_of_measurement
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
