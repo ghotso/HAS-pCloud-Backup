@@ -20,11 +20,21 @@ _LOGGER = logging.getLogger(__name__)
 
 # Timeout configuration for HTTP requests
 # Connect timeout: time to establish connection
-# Total timeout: total time for entire request (important for large uploads)
+# Total timeout: entire request (large backups can exceed 1 hour on slow uplinks)
+DEFAULT_TRANSFER_TOTAL_SECONDS = 86400  # 24 hours
 CONNECT_TIMEOUT = aiohttp.ClientTimeout(connect=30)  # 30 seconds to connect
-UPLOAD_TIMEOUT = aiohttp.ClientTimeout(connect=30, total=3600)  # 1 hour total for large uploads
-DOWNLOAD_TIMEOUT = aiohttp.ClientTimeout(connect=30, total=3600)  # 1 hour total for large downloads
+UPLOAD_TIMEOUT = aiohttp.ClientTimeout(
+    connect=30, total=DEFAULT_TRANSFER_TOTAL_SECONDS
+)
+DOWNLOAD_TIMEOUT = aiohttp.ClientTimeout(
+    connect=30, total=DEFAULT_TRANSFER_TOTAL_SECONDS
+)
 STANDARD_TIMEOUT = aiohttp.ClientTimeout(connect=30, total=120)  # 2 minutes for standard requests
+
+
+def _upload_client_timeout(total_seconds: int) -> aiohttp.ClientTimeout:
+    """Client timeout for upload POST (total wall-clock including body transfer)."""
+    return aiohttp.ClientTimeout(connect=30, total=float(total_seconds))
 
 
 class PCloudAPIError(Exception):
@@ -289,7 +299,13 @@ class PCloudAPI:
             raise PCloudAPIError(f"Network error uploading {filename}: {err}") from err
 
     async def async_upload_file_from_stream(
-        self, folder_id: int, filename: str, stream: AsyncIterator[bytes], file_size: int | None = None
+        self,
+        folder_id: int,
+        filename: str,
+        stream: AsyncIterator[bytes],
+        file_size: int | None = None,
+        *,
+        upload_total_seconds: int | None = None,
     ) -> dict[str, Any]:
         """Upload a large file from async stream to pCloud using dual-path strategy.
         
@@ -306,12 +322,20 @@ class PCloudAPI:
             filename: Name of the file to upload
             stream: Async iterator yielding bytes chunks
             file_size: Known file size in bytes (None if unknown)
+            upload_total_seconds: Max seconds for the upload HTTP request (default 24h).
         
         Returns:
             pCloud API response dict
         """
         import tempfile
         import os
+
+        eff_upload_seconds = (
+            upload_total_seconds
+            if upload_total_seconds is not None
+            else DEFAULT_TRANSFER_TOTAL_SECONDS
+        )
+        upload_client_timeout = _upload_client_timeout(eff_upload_seconds)
         
         _LOGGER.info(
             "Starting streaming upload of %s (size: %s) to pCloud",
@@ -323,7 +347,11 @@ class PCloudAPI:
         if file_size and file_size > 0:
             try:
                 return await self._async_upload_via_fifo(
-                    folder_id, filename, stream, file_size
+                    folder_id,
+                    filename,
+                    stream,
+                    file_size,
+                    upload_client_timeout,
                 )
             except PCloudAPIError as fifo_err:
                 # Check if it's a connection reset (pCloud rejecting chunked encoding)
@@ -347,11 +375,16 @@ class PCloudAPI:
         
         # PATH 2: Unknown size - Use temp file in /backup
         return await self._async_upload_via_tempfile(
-            folder_id, filename, stream
+            folder_id, filename, stream, upload_client_timeout
         )
     
     async def _async_upload_via_fifo(
-        self, folder_id: int, filename: str, stream: AsyncIterator[bytes], file_size: int
+        self,
+        folder_id: int,
+        filename: str,
+        stream: AsyncIterator[bytes],
+        file_size: int,
+        upload_client_timeout: aiohttp.ClientTimeout,
     ) -> dict[str, Any]:
         """Upload via FIFO (named pipe) when file size is known.
         
@@ -379,7 +412,9 @@ class PCloudAPI:
                     "FIFO not available on this system (Windows?). "
                     "Falling back to temp file method."
                 )
-                return await self._async_upload_via_tempfile(folder_id, filename, stream)
+                return await self._async_upload_via_tempfile(
+                    folder_id, filename, stream, upload_client_timeout
+                )
             
             # Create FIFO in system temp directory (secure, uses tempfile.gettempdir())
             try:
@@ -393,7 +428,9 @@ class PCloudAPI:
                     "Falling back to temp file method.",
                     err
                 )
-                return await self._async_upload_via_tempfile(folder_id, filename, stream)
+                return await self._async_upload_via_tempfile(
+                    folder_id, filename, stream, upload_client_timeout
+                )
             
             # Create temporary name for FIFO
             fifo_fd, fifo_path = tempfile.mkstemp(suffix='.tar.fifo', dir=temp_dir)
@@ -630,7 +667,11 @@ class PCloudAPI:
             # Do NOT manually set Content-Length header - let aiohttp handle it
             try:
                 async with session.post(
-                    url, params=params, data=writer, headers=headers, timeout=UPLOAD_TIMEOUT
+                    url,
+                    params=params,
+                    data=writer,
+                    headers=headers,
+                    timeout=upload_client_timeout,
                 ) as response:
                     result = await response.json()
                     
@@ -725,7 +766,11 @@ class PCloudAPI:
                     _LOGGER.debug("Ignoring broken pipe error from writer (expected when reader closes early)")
     
     async def _async_upload_via_tempfile(
-        self, folder_id: int, filename: str, stream: AsyncIterator[bytes]
+        self,
+        folder_id: int,
+        filename: str,
+        stream: AsyncIterator[bytes],
+        upload_client_timeout: aiohttp.ClientTimeout,
     ) -> dict[str, Any]:
         """Upload via temp file in /backup when file size is unknown.
         
@@ -814,7 +859,12 @@ class PCloudAPI:
             )
             
             # Use proven async_upload_file_from_path method
-            result = await self.async_upload_file_from_path(folder_id, filename, temp_path)
+            result = await self.async_upload_file_from_path(
+                folder_id,
+                filename,
+                temp_path,
+                upload_client_timeout=upload_client_timeout,
+            )
             
             _LOGGER.info(
                 "Successfully uploaded %s via temp file (%d MB, %d chunks)",
@@ -837,7 +887,12 @@ class PCloudAPI:
                     _LOGGER.warning("Failed to delete temp file %s: %s", temp_path, cleanup_err)
 
     async def async_upload_file_from_path(
-        self, folder_id: int, filename: str, file_path: str
+        self,
+        folder_id: int,
+        filename: str,
+        file_path: str,
+        *,
+        upload_client_timeout: aiohttp.ClientTimeout | None = None,
     ) -> dict[str, Any]:
         """Upload a large file from disk to pCloud using streaming to avoid loading entire file in memory.
         
@@ -860,7 +915,9 @@ class PCloudAPI:
         except Exception as err:
             _LOGGER.error("Failed to stat file %s: %s", file_path, err)
             raise PCloudAPIError(f"File not found or inaccessible: {file_path}") from err
-        
+
+        req_timeout = upload_client_timeout or UPLOAD_TIMEOUT
+
         session = await self._get_session()
         
         # Determine if using OAuth2 (Bearer token) or digest auth (auth parameter)
@@ -905,7 +962,11 @@ class PCloudAPI:
                 _LOGGER.debug("Uploading %s to pCloud...", filename)
                 try:
                     async with session.post(
-                        url, params=params, data=form_data, headers=headers, timeout=UPLOAD_TIMEOUT
+                        url,
+                        params=params,
+                        data=form_data,
+                        headers=headers,
+                        timeout=req_timeout,
                     ) as response:
                         result = await response.json()
                         
@@ -925,8 +986,9 @@ class PCloudAPI:
                         return result
                         
                 except asyncio.TimeoutError as err:
+                    total_s = int(req_timeout.total or DEFAULT_TRANSFER_TOTAL_SECONDS)
                     _LOGGER.error(
-                        "Upload timeout for %s after %d seconds", filename, UPLOAD_TIMEOUT.total
+                        "Upload timeout for %s after %d seconds", filename, total_s
                     )
                     raise PCloudAPIError(f"Upload timeout for {filename}") from err
                 except aiohttp.ClientError as err:

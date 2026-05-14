@@ -56,7 +56,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     auth = create_auth(
         hass=hass,
         region=region,
-        access_token=entry.data["token"]["access_token"],
+        config_entry_id=entry.entry_id,
     )
 
     # Create API instance

@@ -1,153 +1,365 @@
+# Automated release when custom_components/pcloud_backup/manifest.json version on main
+# is greater than the latest v* tag and no tag exists yet for that version.
+#
+# Creates: git tag vX.Y.Z, GitHub Draft Release (notes + pcloud_backup.zip).
+# You publish the draft on GitHub when ready — that makes the release public.
+#
+# Optional: set repository secret GH_TOKEN (fine-grained PAT: contents read/write,
+# metadata read) if GITHUB_TOKEN cannot push tags or create releases (e.g. branch rules).
+# Optional: OPENAI_API_TOKEN — drafts user-facing release notes from integration-only
+# commits (under custom_components/pcloud_backup/). Excludes workflow/CI-only changes.
+
 name: Release
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
-    inputs:
-      version:
-        description: 'Version number (e.g., 0.1.0, 1.2.3)'
-        required: true
-        type: string
 
 permissions:
   contents: write
 
+concurrency:
+  group: release-automation
+  cancel-in-progress: false
+
 jobs:
   release:
-    name: Release
+    name: Version check, tag, release, and zip
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.GH_TOKEN }}
+          token: ${{ secrets.GH_TOKEN || github.token }}
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install python-semantic-release
+      - name: Evaluate manifest vs latest tag and prepare release
+        id: plan
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          OPENAI_API_TOKEN: ${{ secrets.OPENAI_API_TOKEN }}
         run: |
-          pip install python-semantic-release[changelog]>=9.0.0
+          set -euo pipefail
+          pip install --quiet packaging
+          python3 << 'PY'
+          import json
+          import os
+          import re
+          import subprocess
+          import sys
 
-      - name: Validate version format
-        run: |
-          VERSION="${{ github.event.inputs.version }}"
-          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9-]+(\.[0-9]+)?)?$'; then
-            echo "❌ Invalid version format: $VERSION"
-            echo "Version must follow SemVer format: MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH-PRERELEASE"
-            exit 1
-          fi
-          echo "✅ Version format is valid: $VERSION"
+          from packaging.version import InvalidVersion, Version
 
-      - name: Configure git
+          def run(cmd: list[str]) -> str:
+              return subprocess.check_output(cmd, text=True).strip()
+
+          def latest_version_tag() -> str | None:
+              try:
+                  out = run(
+                      [
+                          "git",
+                          "tag",
+                          "-l",
+                          "v*",
+                          "--sort=-v:refname",
+                      ]
+                  )
+              except subprocess.CalledProcessError:
+                  return None
+              lines = [ln for ln in out.splitlines() if ln.strip()]
+              if not lines:
+                  return None
+              for tag in lines:
+                  m = re.match(r"^v(.+)$", tag)
+                  if not m:
+                      continue
+                  try:
+                      Version(m.group(1))
+                      return tag
+                  except InvalidVersion:
+                      continue
+              return lines[0]
+
+          def tag_exists(tag: str) -> bool:
+              try:
+                  run(["git", "rev-parse", tag])
+                  return True
+              except subprocess.CalledProcessError:
+                  return False
+
+          with open("custom_components/pcloud_backup/manifest.json", encoding="utf-8") as f:
+              manifest = json.load(f)
+          manifest_version = str(manifest.get("version", "")).strip()
+          if not manifest_version:
+              print("::error::manifest.json has no version")
+              sys.exit(1)
+
+          try:
+              mv = Version(manifest_version)
+          except InvalidVersion as e:
+              print(f"::error::Invalid semver in manifest: {manifest_version!r} ({e})")
+              sys.exit(1)
+
+          latest_tag = latest_version_tag()
+          if latest_tag:
+              m = re.match(r"^v(.+)$", latest_tag)
+              lv = Version(m.group(1)) if m else Version("0")
+          else:
+              lv = Version("0")
+
+          new_tag = f"v{manifest_version}"
+
+          if mv <= lv:
+              print(f"No release: manifest {manifest_version} is not greater than latest tag {latest_tag or 'none'}.")
+              with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as gh:
+                  gh.write("should_release=false\n")
+              sys.exit(0)
+
+          if tag_exists(new_tag):
+              print(f"No release: tag {new_tag} already exists (manifest bump only?).")
+              with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as gh:
+                  gh.write("should_release=false\n")
+              sys.exit(0)
+
+          range_ref = f"{latest_tag}..HEAD" if latest_tag else ""
+          log_rev: list[str] = [f"{latest_tag}..HEAD"] if latest_tag else []
+          rev_list_range: list[str] = [f"{latest_tag}..HEAD"] if latest_tag else ["HEAD"]
+
+          def git_output(cmd: list[str]) -> str:
+              try:
+                  return subprocess.check_output(cmd, text=True).strip()
+              except subprocess.CalledProcessError:
+                  return ""
+
+          integration_path = "custom_components/pcloud_backup"
+          integration_log = git_output(
+              [
+                  "git",
+                  "log",
+                  *log_rev,
+                  "--no-merges",
+                  "-n",
+                  "500",
+                  "--pretty=format:- %s (%h)",
+                  "--",
+                  integration_path,
+              ]
+          )
+
+          all_count_s = git_output(
+              ["git", "rev-list", "--count", "--no-merges", *rev_list_range]
+          )
+          int_count_s = git_output(
+              [
+                  "git",
+                  "rev-list",
+                  "--count",
+                  "--no-merges",
+                  *rev_list_range,
+                  "--",
+                  integration_path,
+              ]
+          )
+          try:
+              all_c = int(all_count_s) if all_count_s else 0
+              int_c = int(int_count_s) if int_count_s else 0
+          except ValueError:
+              all_c, int_c = 0, 0
+          excluded_c = max(0, all_c - int_c)
+
+          repo = os.environ.get("GITHUB_REPOSITORY", "ghotso/HAS-pCloud-Backup")
+          if latest_tag:
+              compare_url = f"https://github.com/{repo}/compare/{latest_tag}...{new_tag}"
+          else:
+              compare_url = f"https://github.com/{repo}/commits/{new_tag}"
+
+          def fallback_notes() -> str:
+              body = (
+                  integration_log
+                  or "- *(No commits in this range touched `custom_components/pcloud_backup/` — "
+                  "e.g. workflow-only or repo metadata changes.)*"
+              )
+              return "\n".join(
+                  [
+                      f"# 🚀 Release notes – {new_tag}",
+                      "",
+                      "Automated draft (OpenAI unavailable). Only commits under "
+                      f"`{integration_path}/` are listed below.",
+                      "",
+                      "## What's changed",
+                      "",
+                      body,
+                      "",
+                      "***",
+                      "",
+                      "**Full Changelog:**",
+                      compare_url,
+                      "",
+                      "***",
+                      "",
+                      "Install: download **pcloud_backup.zip** below, extract it into your Home Assistant "
+                      "**`config/custom_components/`** directory so you have "
+                      "**`config/custom_components/pcloud_backup/`** (restart Home Assistant).",
+                      "",
+                      "> **Draft:** Publish this release on GitHub when you are ready; "
+                      "until then it stays visible only to maintainers.",
+                  ]
+              )
+
+          def openai_release_notes() -> str | None:
+              api_key = (os.environ.get("OPENAI_API_TOKEN") or "").strip()
+              if not api_key:
+                  return None
+
+              import textwrap
+              import urllib.error
+              import urllib.request
+
+              integration_block = (
+                  integration_log
+                  if integration_log
+                  else "(none — no commits in this range modified files under `custom_components/pcloud_backup/`.)"
+              )
+
+              user_prompt = textwrap.dedent(
+                  f"""\
+                  ## Release context
+                  - Integration: Home Assistant custom component **pCloud Backup** (`pcloud_backup`).
+                  - Version tag: **{new_tag}**
+                  - Previous release tag: **{latest_tag or "(first release — none)"}**
+                  - Compare URL (copy exactly for the Full Changelog line): `{compare_url}`
+                  - Commits in range (any path): **{all_c}** — commits that touched **only** paths outside
+                    `{integration_path}/` are **{excluded_c}** and must **not** appear in user-facing bullets.
+
+                  ## Commits that modified `{integration_path}/` (ONLY source for user-facing changes)
+                  {integration_block}
+
+                  ## Your task
+                  Write **GitHub-flavored Markdown** release notes for end users (not developers).
+
+                  **Rules**
+                  - Summarize **only** changes implied by the commits above. Do **not** mention CI, GitHub Actions,
+                    `.github/`, release automation, or other repo-only work — those commits are intentionally omitted.
+                  - If the list above is empty or only trivial (e.g. version bump only), say clearly that there are
+                    no functional integration changes or only maintenance/version metadata.
+                  - Omit noisy internal refactors unless they affect users.
+                  - Do **not** use a line that is exactly `---` (three hyphens) anywhere (CI constraint). Use `***`
+                    for horizontal rules if needed.
+
+                  **Required structure (order matters)**
+                  1. First line exactly: `# 🚀 Release notes – {new_tag}`
+                  2. Short intro paragraph (user-facing tone).
+                  3. Section `## What's changed` with bullet list of user-visible changes.
+                  4. Optional `## Breaking changes` — use `* None` if none.
+                  5. A line with only `***`
+                  6. Line `**Full Changelog:**` then the next line **only** the compare URL: {compare_url}
+                  7. A line with only `***`
+                  8. This install paragraph **verbatim** (single paragraph):
+                  Install: download **pcloud_backup.zip** below, extract it into your Home Assistant **`config/custom_components/`** directory so you have **`config/custom_components/pcloud_backup/`** (restart Home Assistant).
+                  9. Final blockquote line exactly:
+                  > **Draft:** Publish this release on GitHub when you are ready; until then it stays visible only to maintainers.
+
+                  Output **only** the Markdown document, no preamble or code fences.
+                  """
+              ).strip()
+
+              system_prompt = (
+                  "You write concise, accurate Markdown release notes for a Home Assistant custom integration. "
+                  "Never invent features or fixes not supported by the supplied commits."
+              )
+
+              payload = {
+                  "model": "gpt-4o-mini",
+                  "messages": [
+                      {"role": "system", "content": system_prompt},
+                      {"role": "user", "content": user_prompt},
+                  ],
+                  "temperature": 0.35,
+              }
+              req = urllib.request.Request(
+                  "https://api.openai.com/v1/chat/completions",
+                  data=json.dumps(payload).encode("utf-8"),
+                  headers={
+                      "Authorization": f"Bearer {api_key}",
+                      "Content-Type": "application/json",
+                  },
+                  method="POST",
+              )
+              try:
+                  with urllib.request.urlopen(req, timeout=120) as resp:
+                      raw = json.load(resp)
+                  content = raw["choices"][0]["message"]["content"]
+                  if isinstance(content, str) and content.strip():
+                      return content.strip()
+              except urllib.error.HTTPError as e:
+                  err_body = e.read().decode("utf-8", errors="replace")[:2000]
+                  print(f"::warning::OpenAI HTTP {e.code}: {err_body}")
+              except Exception as e:
+                  print(f"::warning::OpenAI request failed: {e!r}")
+              return None
+
+          notes = openai_release_notes() or fallback_notes()
+          nt = notes.strip()
+          if nt.startswith("```"):
+              ls = nt.splitlines()
+              if ls and ls[0].startswith("```"):
+                  ls = ls[1:]
+              if ls and ls[-1].strip().startswith("```"):
+                  ls = ls[:-1]
+              notes = "\n".join(ls).strip()
+          else:
+              notes = nt
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as gh:
+              gh.write("should_release=true\n")
+              gh.write(f"version={manifest_version}\n")
+              gh.write(f"tag={new_tag}\n")
+              gh.write(f"range_ref={range_ref}\n")
+
+          with open("release_notes.md", "w", encoding="utf-8") as rf:
+              rf.write(notes)
+
+          print(f"Will release {new_tag} (manifest {manifest_version} > {latest_tag or 'no prior tag'})")
+          PY
+
+      - name: Build pcloud_backup.zip
+        if: steps.plan.outputs.should_release == 'true'
         run: |
+          set -euo pipefail
+          rm -f pcloud_backup.zip
+          cd custom_components
+          zip -rq ../pcloud_backup.zip pcloud_backup
+          cd ..
+          unzip -l pcloud_backup.zip | head -20
+          echo "Built pcloud_backup.zip ($(wc -c < pcloud_backup.zip) bytes)"
+
+      - name: Create annotated tag, push, and draft GitHub Release with asset
+        if: steps.plan.outputs.should_release == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
+          VERSION: ${{ steps.plan.outputs.version }}
+          TAG: ${{ steps.plan.outputs.tag }}
+        run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Update version and generate changelog
-        env:
-          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
-        run: |
-          VERSION="${{ github.event.inputs.version }}"
-          
-          # Update manifest.json version
-          python3 << EOF
-          import json
-          
-          manifest_path = "custom_components/pcloud_backup/manifest.json"
-          with open(manifest_path, 'r') as f:
-              manifest = json.load(f)
-          
-          old_version = manifest.get('version', '0.0.0')
-          manifest['version'] = "$VERSION"
-          
-          with open(manifest_path, 'w') as f:
-              json.dump(manifest, f, indent=2)
-          
-          print(f"✅ Updated version from {old_version} to $VERSION")
-          EOF
-          
-          # Generate changelog from commits since last tag
-          echo "Generating changelog from commits since last release..."
-          semantic-release changelog --unreleased || echo "No new commits or changelog generation completed"
-          
-          # Show what will be released
-          echo "📋 Changes in this release:"
-          if [ -f "CHANGELOG.md" ]; then
-            head -n 50 CHANGELOG.md | grep -A 50 "## \[Unreleased\]" || head -n 50 CHANGELOG.md
-          fi
-
-      - name: Create tag and commit
-        run: |
-          VERSION="${{ github.event.inputs.version }}"
-          
-          # Check if tag already exists
-          if git rev-parse "v$VERSION" >/dev/null 2>&1; then
-            echo "⚠️ Tag v$VERSION already exists!"
+          if ! git diff --quiet; then
+            echo "::error::Working tree is dirty; cannot tag."
+            git status -sb
             exit 1
           fi
-          
-          # Add changes
-          git add custom_components/pcloud_backup/manifest.json
-          if [ -f "CHANGELOG.md" ]; then
-            git add CHANGELOG.md
-          fi
-          
-          # Commit changes (if any)
-          if ! git diff --staged --quiet; then
-            git commit -m "chore(release): v$VERSION [skip ci]"
-          fi
-          
-          # Create annotated tag
-          git tag -a "v$VERSION" -m "Release v$VERSION"
-          
-          # Push commit and tag
-          git push origin HEAD
-          git push origin "v$VERSION"
 
-      - name: Create GitHub Release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
-          VERSION: ${{ github.event.inputs.version }}
-        run: |
-          # Extract changelog content for this version
-          CHANGELOG_CONTENT=$(python3 << PYEOF
-          import re
-          import os
-          
-          version = os.environ.get('VERSION', '0.0.0')
-          try:
-              with open('CHANGELOG.md', 'r') as f:
-                  content = f.read()
-              
-              # Try to extract unreleased section or first section after [Unreleased]
-              # Look for ## [Unreleased] and get content until next ##
-              unreleased_match = re.search(r'##\s*\[Unreleased\](.*?)(?=##\s*\[|$)', content, re.DOTALL)
-              if unreleased_match:
-                  changelog_text = unreleased_match.group(1).strip()
-                  if changelog_text and changelog_text != "":
-                      print(changelog_text)
-                      exit(0)
-              
-              # Fallback: try to find version section
-              version_pattern = rf'##\s*\[?{re.escape(version)}\](?:.*?\n)?(.*?)(?=##\s*\[|$)'
-              version_match = re.search(version_pattern, content, re.DOTALL | re.IGNORECASE)
-              if version_match:
-                  print(version_match.group(1).strip())
-                  exit(0)
-              
-              # Last fallback: just print a simple release message
-              print(f"Release v{version}\n\nSee CHANGELOG.md for details.")
-          except Exception as e:
-              print(f"Release v{version}\n\nSee CHANGELOG.md for details.")
-          PYEOF
-          )
-          
-          # Create GitHub release using GitHub CLI
-          echo "$CHANGELOG_CONTENT" | gh release create "v${{ github.event.inputs.version }}" \
-            --title "v${{ github.event.inputs.version }}" \
-            --notes-file -
-          
-          echo "✅ Created GitHub release v${{ github.event.inputs.version }}"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
+
+          gh release create "$TAG" \
+            --draft \
+            --title "$TAG" \
+            --notes-file release_notes.md \
+            pcloud_backup.zip
+
+          echo "Created draft release $TAG with pcloud_backup.zip — publish it on GitHub when ready."

@@ -13,9 +13,10 @@
       },
       "folder_path": {
         "title": "Backup-Ordner konfigurieren",
-        "description": "Gib den Ordnerpfad in pCloud ein, in dem Backups gespeichert werden sollen. Der Ordner wird erstellt, falls er nicht existiert.",
+        "description": "Gib den Ordnerpfad in pCloud ein, in dem Backups gespeichert werden sollen. Der Ordner wird erstellt, falls er nicht existiert. Lege das Upload-Timeout f\u00fcr gro\u00dfe Backups bei langsamen Uploads fest.",
         "data": {
-          "backup_folder": "Backup-Pfad"
+          "backup_folder": "Backup-Pfad",
+          "upload_timeout_seconds": "Upload-Timeout (Sekunden)"
         }
       }
     },
@@ -33,9 +34,10 @@
     "step": {
       "init": {
         "title": "pCloud Backup Optionen",
-        "description": "Konfiguriere den Backup-Pfad in pCloud.",
+        "description": "Konfiguriere den Backup-Pfad in pCloud und das Upload-Timeout f\u00fcr gro\u00dfe Backups.",
         "data": {
-          "backup_folder": "Backup-Pfad"
+          "backup_folder": "Backup-Pfad",
+          "upload_timeout_seconds": "Upload-Timeout (Sekunden)"
         }
       }
     }
