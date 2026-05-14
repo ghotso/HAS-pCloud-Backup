@@ -200,9 +200,10 @@ jobs:
                       "",
                       "***",
                       "",
-                      "Install: download **pcloud_backup.zip** below, extract it into your Home Assistant "
-                      "**`config/custom_components/`** directory so you have "
-                      "**`config/custom_components/pcloud_backup/`** (restart Home Assistant).",
+                      "Install: **HACS** — download/update as usual. **Manual** — create "
+                      "**`config/custom_components/pcloud_backup/`**, download **pcloud_backup.zip**, extract "
+                      "**all files** from the zip into that folder (you should see **`manifest.json`** next to "
+                      "**`__init__.py`**), then restart Home Assistant.",
                       "",
                       "> **Draft:** Publish this release on GitHub when you are ready; "
                       "until then it stays visible only to maintainers.",
@@ -258,7 +259,7 @@ jobs:
                   6. Line `**Full Changelog:**` then the next line **only** the compare URL: {compare_url}
                   7. A line with only `***`
                   8. This install paragraph **verbatim** (single paragraph):
-                  Install: download **pcloud_backup.zip** below, extract it into your Home Assistant **`config/custom_components/`** directory so you have **`config/custom_components/pcloud_backup/`** (restart Home Assistant).
+                  Install: **HACS** — download/update as usual. **Manual** — create **`config/custom_components/pcloud_backup/`**, download **pcloud_backup.zip**, extract **all files** from the zip into that folder (you should see **`manifest.json`** next to **`__init__.py`**), then restart Home Assistant.
                   9. Final blockquote line exactly:
                   > **Draft:** Publish this release on GitHub when you are ready; until then it stays visible only to maintainers.
 
@@ -330,9 +331,11 @@ jobs:
         run: |
           set -euo pipefail
           rm -f pcloud_backup.zip
-          cd custom_components
-          zip -rq ../pcloud_backup.zip pcloud_backup
-          cd ..
+          # HACS zip_release: extractall() targets config/custom_components/<domain>/ with no path rewrite.
+          # Archive paths must be integration-root (manifest.json at zip root), not pcloud_backup/...
+          cd custom_components/pcloud_backup
+          zip -rq ../../pcloud_backup.zip .
+          cd ../..
           unzip -l pcloud_backup.zip | head -20
           echo "Built pcloud_backup.zip ($(wc -c < pcloud_backup.zip) bytes)"
 

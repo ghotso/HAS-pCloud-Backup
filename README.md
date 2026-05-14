@@ -38,10 +38,10 @@ A native Home Assistant Backup Agent integration for pCloud, enabling users to s
 
 ### Manual Installation
 
-1. Download the [latest release][releases]
-2. Extract the `pcloud_backup` folder to your `custom_components` directory:
+1. Download **pcloud_backup.zip** from the [latest release][releases]
+2. On your Home Assistant host, create **`config/custom_components/pcloud_backup/`** if it does not exist, then extract **all contents** of the zip into that folder (not into `custom_components/` directly — **`manifest.json`** must end up at **`config/custom_components/pcloud_backup/manifest.json`**).
    ```
-   config/custom_components/pcloud_backup/
+   config/custom_components/pcloud_backup/manifest.json
    ```
 3. **Restart Home Assistant** (required after installation)
 4. After restart, go to **Settings** → **Devices & Services**
