@@ -320,7 +320,8 @@ class PCloudOAuth2Auth(PCloudAuth):
         """Get OAuth2 access token."""
         if self._config_entry_id is not None:
             return self._token_from_config_entry()
-        assert self._access_token is not None
+        if self._access_token is None:
+            raise ValueError("OAuth2 static access token is missing")
         return self._access_token
 
     async def refresh_token_if_needed(self) -> None:
