@@ -6,7 +6,7 @@ from typing import Any
 
 import voluptuous as vol
 
-from homeassistant.config_entries import ConfigEntry, ConfigFlow, OptionsFlow
+from homeassistant.config_entries import ConfigEntry, OptionsFlow
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import config_entry_oauth2_flow
@@ -31,12 +31,31 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
+def _backup_options_schema(
+    *,
+    backup_folder_default: str,
+    upload_timeout_default: int,
+) -> vol.Schema:
+    """Shared schema for initial setup (folder_path) and integration options."""
+    return vol.Schema(
+        {
+            vol.Required(CONF_BACKUP_FOLDER, default=backup_folder_default): str,
+            vol.Required(
+                CONF_UPLOAD_TIMEOUT_SECONDS,
+                default=upload_timeout_default,
+            ): vol.All(
+                vol.Coerce(int),
+                vol.Range(
+                    min=MIN_UPLOAD_TIMEOUT_SECONDS,
+                    max=MAX_UPLOAD_TIMEOUT_SECONDS,
+                ),
+            ),
+        }
+    )
+
+
 class PCloudOptionsFlowHandler(OptionsFlow):
     """Handle options flow for pCloud Backup."""
-
-    def __init__(self, config_entry: ConfigEntry) -> None:
-        """Initialize options flow."""
-        self.config_entry = config_entry
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
@@ -48,36 +67,18 @@ class PCloudOptionsFlowHandler(OptionsFlow):
         options = self.config_entry.options
         return self.async_show_form(
             step_id="init",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(
-                        CONF_BACKUP_FOLDER,
-                        default=options.get(CONF_BACKUP_FOLDER, DEFAULT_BACKUP_FOLDER),
-                    ): str,
-                    vol.Required(
+            data_schema=_backup_options_schema(
+                backup_folder_default=options.get(
+                    CONF_BACKUP_FOLDER, DEFAULT_BACKUP_FOLDER
+                ),
+                upload_timeout_default=int(
+                    options.get(
                         CONF_UPLOAD_TIMEOUT_SECONDS,
-                        default=int(
-                            options.get(
-                                CONF_UPLOAD_TIMEOUT_SECONDS,
-                                DEFAULT_UPLOAD_TIMEOUT_SECONDS,
-                            )
-                        ),
-                    ): vol.All(
-                        vol.Coerce(int),
-                        vol.Range(
-                            min=MIN_UPLOAD_TIMEOUT_SECONDS,
-                            max=MAX_UPLOAD_TIMEOUT_SECONDS,
-                        ),
-                    ),
-                }
+                        DEFAULT_UPLOAD_TIMEOUT_SECONDS,
+                    )
+                ),
             ),
         )
-
-
-@callback
-def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
-    """Get the options flow for this handler."""
-    return PCloudOptionsFlowHandler(config_entry)
 
 
 class PCloudOAuth2Implementation(config_entry_oauth2_flow.LocalOAuth2Implementation):
@@ -346,7 +347,12 @@ class PCloudConfigFlow(
 
     DOMAIN = DOMAIN
     VERSION = 2
-    OPTIONS_FLOW = async_get_options_flow
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(_config_entry: ConfigEntry) -> OptionsFlow:
+        """Return the options flow; core wires `config_entry` via `handler`, do not pass it into __init__."""
+        return PCloudOptionsFlowHandler()
 
     @property
     def logger(self) -> logging.Logger:
@@ -406,7 +412,12 @@ class PCloudConfigFlow(
         
         if user_input is not None:
             backup_folder = user_input.get(CONF_BACKUP_FOLDER, DEFAULT_BACKUP_FOLDER)
-            
+            upload_timeout_s = int(
+                user_input.get(
+                    CONF_UPLOAD_TIMEOUT_SECONDS, DEFAULT_UPLOAD_TIMEOUT_SECONDS
+                )
+            )
+
             # Test connection and validate folder path
             try:
                 region = getattr(self, "_oauth_region", "us")
@@ -451,6 +462,7 @@ class PCloudConfigFlow(
                         },
                         options={
                             CONF_BACKUP_FOLDER: backup_folder,
+                            CONF_UPLOAD_TIMEOUT_SECONDS: upload_timeout_s,
                         },
                     )
             except PCloudAPIError as err:
@@ -462,13 +474,9 @@ class PCloudConfigFlow(
         
         return self.async_show_form(
             step_id="folder_path",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(
-                        CONF_BACKUP_FOLDER,
-                        default=DEFAULT_BACKUP_FOLDER,
-                    ): str,
-                }
+            data_schema=_backup_options_schema(
+                backup_folder_default=DEFAULT_BACKUP_FOLDER,
+                upload_timeout_default=DEFAULT_UPLOAD_TIMEOUT_SECONDS,
             ),
             errors=errors,
         )

@@ -70,14 +70,15 @@ The integration uses OAuth2 authentication for secure access to your pCloud acco
 4. You'll be redirected back to the cloud Home Assistant redirect page
 5. If not already entered, enter the address to your Homeassistant installation and click on link account.
 
-#### Step 3: Configure Storage Path
+#### Step 3: Configure Storage Path & Upload Timeout
 
-1. You'll be prompted to enter the **pCloud folder path** where backups will be stored
+1. You'll be prompted for the **pCloud folder path** where backups will be stored
 2. Default path: `/HomeAssistant/Backups`
 3. You can customize this path (e.g., `/Backups/HomeAssistant` or `/MyBackups`)
-4. Click **Submit**
+4. You'll also set **Upload timeout (seconds)** — this is the maximum wall‑clock time allowed for **one** backup upload over HTTPS (large backups on slow links need a higher value). **Default: 86400 seconds (24 hours).** Allowed range: **600–172800** seconds (10 minutes–48 hours).
+5. Click **Submit**
 
-> **Note:** The storage path can only be set during initial setup. To change it later, you'll need to remove and re-add the integration.
+> **Note:** You can change **both** the backup folder path and the **upload timeout (seconds)** at any time under **Settings** → **Devices & services** → **pCloud Backup** → **Configure**. The default timeout remains **86400** seconds unless you change it. When you save, Home Assistant reloads the integration entry automatically so new values apply to the next backup.
 
 #### Step 4: Complete Setup
 
@@ -101,6 +102,8 @@ Once configured, the integration will:
 **OAuth2 Redirect URI:** The integration uses Home Assistant's OAuth2 redirect system. For Home Assistant Cloud users, the redirect URI is `https://my.home-assistant.io/redirect/oauth`. For local instances, Home Assistant automatically handles the redirect URI.
 
 **Region Detection:** The integration automatically detects whether your pCloud account uses the EU or US datacenter based on the OAuth2 callback response. No manual configuration needed!
+
+**Upload timeout:** The maximum duration (in **seconds**) for a single backup upload is configurable during setup and at any time under the integration’s **Configure** dialog. Default **86400** (24 hours); allowed **600–172800** (10 minutes–48 hours). Raise it if very large backups fail with upload timeouts on a slow uplink.
 
 ## Sensors
 
