@@ -16,8 +16,12 @@ from .auth import create_auth
 from .const import (
     CONF_BACKUP_FOLDER,
     CONF_REGION,
+    CONF_UPLOAD_TIMEOUT_SECONDS,
     DEFAULT_BACKUP_FOLDER,
+    DEFAULT_UPLOAD_TIMEOUT_SECONDS,
     DOMAIN,
+    MAX_UPLOAD_TIMEOUT_SECONDS,
+    MIN_UPLOAD_TIMEOUT_SECONDS,
     OAUTH2_AUTHORIZE,
     OAUTH2_CLIENT_ID,
     OAUTH2_CLIENT_SECRET,
@@ -50,6 +54,21 @@ class PCloudOptionsFlowHandler(OptionsFlow):
                         CONF_BACKUP_FOLDER,
                         default=options.get(CONF_BACKUP_FOLDER, DEFAULT_BACKUP_FOLDER),
                     ): str,
+                    vol.Required(
+                        CONF_UPLOAD_TIMEOUT_SECONDS,
+                        default=int(
+                            options.get(
+                                CONF_UPLOAD_TIMEOUT_SECONDS,
+                                DEFAULT_UPLOAD_TIMEOUT_SECONDS,
+                            )
+                        ),
+                    ): vol.All(
+                        vol.Coerce(int),
+                        vol.Range(
+                            min=MIN_UPLOAD_TIMEOUT_SECONDS,
+                            max=MAX_UPLOAD_TIMEOUT_SECONDS,
+                        ),
+                    ),
                 }
             ),
         )

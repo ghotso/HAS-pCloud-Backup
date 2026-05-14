@@ -33,9 +33,10 @@
     "step": {
       "init": {
         "title": "pCloud Backup Optionen",
-        "description": "Konfiguriere den Backup-Pfad in pCloud.",
+        "description": "Konfiguriere den Backup-Pfad in pCloud und das Upload-Timeout f\u00fcr gro\u00dfe Backups.",
         "data": {
-          "backup_folder": "Backup-Pfad"
+          "backup_folder": "Backup-Pfad",
+          "upload_timeout_seconds": "Upload-Timeout (Sekunden)"
         }
       }
     }

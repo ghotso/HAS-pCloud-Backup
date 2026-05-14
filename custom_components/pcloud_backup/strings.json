@@ -33,9 +33,10 @@
     "step": {
       "init": {
         "title": "pCloud Backup Options",
-        "description": "Configure the backup folder path in pCloud.",
+        "description": "Configure the backup folder path in pCloud and upload timeout for large backups.",
         "data": {
-          "backup_folder": "Backup Folder Path"
+          "backup_folder": "Backup Folder Path",
+          "upload_timeout_seconds": "Upload timeout (seconds)"
         }
       }
     }

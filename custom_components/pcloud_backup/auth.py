@@ -276,29 +276,88 @@ class PCloudDigestAuth(PCloudAuth):
 
 
 class PCloudOAuth2Auth(PCloudAuth):
-    """OAuth2 authentication for pCloud API (for future use)."""
+    """OAuth2 authentication for pCloud API."""
 
     def __init__(
         self,
         hass: Any,
         region: str,
-        access_token: str,
+        *,
+        config_entry_id: str | None = None,
+        access_token: str | None = None,
     ) -> None:
-        """Initialize OAuth2 authentication."""
+        """Initialize OAuth2 authentication.
+
+        Prefer ``config_entry_id`` so the current access token is always read from
+        the config entry (e.g. after reauth or Home Assistant token refresh). Use
+        ``access_token`` only during the config flow before an entry exists.
+        """
+        if bool(config_entry_id) == bool(access_token):
+            raise ValueError("Specify exactly one of config_entry_id or access_token")
+
         self.hass = hass
         self.region = region.lower()
+        self._config_entry_id = config_entry_id
         self._access_token = access_token
         self._base_url = API_BASE_EU if region.lower() == "eu" else API_BASE_US
 
+    def _token_from_config_entry(self) -> str:
+        """Return the current OAuth access token from the config entry."""
+        if not self._config_entry_id:
+            raise RuntimeError("OAuth auth is not bound to a config entry")
+        entry = self.hass.config_entries.async_get_entry(self._config_entry_id)
+        if entry is None:
+            raise ValueError(f"Config entry {self._config_entry_id} not found")
+        token_container = entry.data.get("token")
+        if not isinstance(token_container, dict):
+            raise ValueError("Config entry has no OAuth token data")
+        access = token_container.get("access_token")
+        if not access:
+            raise ValueError("Config entry has no access_token")
+        return str(access)
+
     async def get_auth_token(self) -> str:
         """Get OAuth2 access token."""
+        if self._config_entry_id is not None:
+            return self._token_from_config_entry()
+        assert self._access_token is not None
         return self._access_token
 
     async def refresh_token_if_needed(self) -> None:
-        """Refresh OAuth2 token if needed."""
-        # OAuth2 token refresh logic would go here
-        # For now, tokens are persistent per pCloud documentation
-        pass
+        """Refresh OAuth2 token via Home Assistant when possible."""
+        if self._config_entry_id is None:
+            return
+
+        entry = self.hass.config_entries.async_get_entry(self._config_entry_id)
+        if entry is None:
+            return
+
+        if "auth_implementation" not in entry.data:
+            _LOGGER.debug(
+                "Skipping OAuth refresh: config entry %s has no auth_implementation",
+                self._config_entry_id,
+            )
+            return
+
+        try:
+            from homeassistant.helpers.config_entry_oauth2_flow import (
+                OAuth2Session,
+                async_get_config_entry_implementation,
+            )
+        except ImportError:
+            return
+
+        try:
+            impl = await async_get_config_entry_implementation(self.hass, entry)
+        except ValueError as err:
+            _LOGGER.warning("Could not resolve OAuth implementation: %s", err)
+            return
+
+        try:
+            session = OAuth2Session(self.hass, entry, impl)
+            await session.async_ensure_token_valid()
+        except Exception as err:
+            _LOGGER.warning("OAuth token refresh failed: %s", err)
 
     async def close(self) -> None:
         """Close OAuth2 session."""
@@ -308,19 +367,25 @@ class PCloudOAuth2Auth(PCloudAuth):
 def create_auth(
     hass: Any,
     region: str,
-    access_token: str,
+    *,
+    config_entry_id: str | None = None,
+    access_token: str | None = None,
 ) -> PCloudAuth:
     """Create OAuth2 authentication instance.
 
     Args:
         hass: Home Assistant instance
         region: pCloud region (us/eu)
-        access_token: OAuth2 access token
+        config_entry_id: If set, read access_token from this config entry on each request.
+        access_token: Static token (config flow only, before entry is created).
 
     Returns:
         PCloudAuth instance
     """
-    if not access_token:
-        raise ValueError("access_token must be provided")
-    return PCloudOAuth2Auth(hass, region, access_token)
+    return PCloudOAuth2Auth(
+        hass,
+        region,
+        config_entry_id=config_entry_id,
+        access_token=access_token,
+    )
 

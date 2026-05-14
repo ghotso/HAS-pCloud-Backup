@@ -32,6 +32,13 @@ CONF_REGION = "region"
 CONF_USERNAME = "username"
 CONF_PASSWORD = "password"
 CONF_BACKUP_FOLDER = "backup_folder"
+CONF_UPLOAD_TIMEOUT_SECONDS = "upload_timeout_seconds"
+
+# Maximum time for a single upload HTTP request (large backups over slow links).
+# Default 24 hours; configurable in integration options.
+DEFAULT_UPLOAD_TIMEOUT_SECONDS = 86400
+MIN_UPLOAD_TIMEOUT_SECONDS = 600
+MAX_UPLOAD_TIMEOUT_SECONDS = 172800
 
 # Sensor attributes
 ATTR_REMOTE_BACKUP_COUNT = "remote_backup_count"

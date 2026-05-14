@@ -1,7 +1,6 @@
 """Backup agent implementation for pCloud."""
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import os
@@ -23,8 +22,10 @@ from homeassistant.core import HomeAssistant, callback
 from .api import PCloudAPI, PCloudAPIError
 from .const import (
     CONF_BACKUP_FOLDER,
+    CONF_UPLOAD_TIMEOUT_SECONDS,
     DATA_BACKUP_AGENT_LISTENERS,
     DEFAULT_BACKUP_FOLDER,
+    DEFAULT_UPLOAD_TIMEOUT_SECONDS,
     DOMAIN,
 )
 
@@ -336,13 +337,17 @@ class PCloudBackupAgent(BackupAgent):
             return backup_name_or_id.split(":", 1)[1]
         return backup_name_or_id
 
-    async def async_get_backup(self, backup_name: str, **kwargs: Any) -> AgentBackup | None:
-        """Get backup information by name."""
+    async def async_get_backup(self, backup_name: str, **kwargs: Any) -> AgentBackup:
+        """Get backup information by name.
+
+        Home Assistant 2025.10+ requires a concrete AgentBackup or a raised
+        BackupNotFound / BackupAgentError — returning None is deprecated.
+        """
         try:
             config_entry = self.hass.config_entries.async_get_entry(self.config_entry_id)
             if config_entry is None:
                 _LOGGER.error("Config entry not found")
-                return None
+                raise PCloudBackupError("pCloud backup agent: config entry not found")
 
             options = config_entry.options
             backup_folder = options.get(CONF_BACKUP_FOLDER, DEFAULT_BACKUP_FOLDER)
@@ -362,18 +367,20 @@ class PCloudBackupAgent(BackupAgent):
                 return backups_by_key[metadata_key]
 
             # As a final fallback, compare against derived keys from metadata
-            for key, agent_backup in backups_by_key.items():
+            for _key, agent_backup in backups_by_key.items():
                 if self._metadata_key_for_backup(agent_backup) == metadata_key:
                     return agent_backup
 
-            return None
+            raise BackupNotFound(f"Backup {backup_name} not found in pCloud")
 
+        except BackupNotFound:
+            raise
         except PCloudAPIError as err:
             _LOGGER.error("Failed to get backup: %s", err, exc_info=True)
-            return None
+            raise PCloudBackupError(f"Failed to get backup: {err}") from err
         except Exception as err:
             _LOGGER.exception("Unexpected error getting backup")
-            return None
+            raise PCloudBackupError(f"Unexpected error getting backup: {err}") from err
 
     async def async_list_backups(self, **kwargs: Any) -> list[AgentBackup]:
         """List all backups in pCloud."""
@@ -469,8 +476,15 @@ class PCloudBackupAgent(BackupAgent):
             
             # Stream directly from backup iterator to pCloud
             # Pass file_size to enable FIFO path when size is known
+            upload_timeout_s = int(
+                options.get(CONF_UPLOAD_TIMEOUT_SECONDS, DEFAULT_UPLOAD_TIMEOUT_SECONDS)
+            )
             await self.api.async_upload_file_from_stream(
-                folder_id, backup_name, stream, file_size=backup_metadata_size if backup_metadata_size > 0 else None
+                folder_id,
+                backup_name,
+                stream,
+                file_size=backup_metadata_size if backup_metadata_size > 0 else None,
+                upload_total_seconds=upload_timeout_s,
             )
 
             # Upload metadata so we can faithfully reconstruct the AgentBackup
