@@ -16,7 +16,11 @@
         "description": "Enter the folder path in pCloud where backups will be stored. The folder will be created if it doesn't exist. Set upload timeout for large backups over slow uplinks.",
         "data": {
           "backup_folder": "Backup Folder Path",
-          "upload_timeout_seconds": "Upload timeout (seconds)"
+          "upload_timeout_seconds": "Upload timeout (seconds)",
+          "permanent_delete": "Permanently delete backups (skip Trash)"
+        },
+        "data_description": {
+          "permanent_delete": "When enabled, deleting a backup also purges it from pCloud Trash, freeing quota immediately. When disabled (default), deleted backups remain recoverable in Trash."
         }
       }
     },
@@ -37,7 +41,11 @@
         "description": "Configure the backup folder path in pCloud and upload timeout for large backups.",
         "data": {
           "backup_folder": "Backup Folder Path",
-          "upload_timeout_seconds": "Upload timeout (seconds)"
+          "upload_timeout_seconds": "Upload timeout (seconds)",
+          "permanent_delete": "Permanently delete backups (skip Trash)"
+        },
+        "data_description": {
+          "permanent_delete": "When enabled, deleting a backup also purges it from pCloud Trash, freeing quota immediately. When disabled (default), deleted backups remain recoverable in Trash."
         }
       }
     }

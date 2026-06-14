@@ -22,9 +22,11 @@ from homeassistant.core import HomeAssistant, callback
 from .api import PCloudAPI, PCloudAPIError
 from .const import (
     CONF_BACKUP_FOLDER,
+    CONF_PERMANENT_DELETE,
     CONF_UPLOAD_TIMEOUT_SECONDS,
     DATA_BACKUP_AGENT_LISTENERS,
     DEFAULT_BACKUP_FOLDER,
+    DEFAULT_PERMANENT_DELETE,
     DEFAULT_UPLOAD_TIMEOUT_SECONDS,
     DOMAIN,
 )
@@ -668,13 +670,23 @@ class PCloudBackupAgent(BackupAgent):
             if file_id is None:
                 raise BackupNotFound(f"Backup {backup_name} has no file ID")
 
+            permanent_delete = options.get(
+                CONF_PERMANENT_DELETE, DEFAULT_PERMANENT_DELETE
+            )
+
             _LOGGER.info("Deleting backup %s from pCloud", backup_name)
             await self.api.async_delete_file(file_id)
+            if permanent_delete:
+                await self._async_trash_clear(file_id, backup_name)
             # Also remove metadata file if present
             metadata_item = metadata_files.get(metadata_key)
             if metadata_item and metadata_item.get("fileid"):
                 try:
                     await self.api.async_delete_file(metadata_item["fileid"])
+                    if permanent_delete:
+                        await self._async_trash_clear(
+                            metadata_item["fileid"], backup_name
+                        )
                 except Exception as err:  # noqa: BLE001
                     _LOGGER.warning(
                         "Failed to delete metadata for backup %s: %s", backup_name, err
@@ -692,6 +704,18 @@ class PCloudBackupAgent(BackupAgent):
             _LOGGER.exception("Unexpected error deleting backup")
             raise PCloudBackupError(f"Unexpected error deleting backup: {err}") from err
 
+    async def _async_trash_clear(self, file_id: int, backup_name: str) -> None:
+        """Permanently purge a deleted file from Trash.
 
+        Best-effort: failures are logged but don't fail the overall delete,
+        since deletefile already succeeded and the backup is no longer
+        listed - it would just remain in Trash until manually emptied.
+        """
+        try:
+            await self.api.async_trash_clear(file_id)
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning(
+                "Failed to purge backup %s from Trash: %s", backup_name, err
+            )
 
 
