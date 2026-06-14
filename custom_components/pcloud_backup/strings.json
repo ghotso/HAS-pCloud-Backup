@@ -20,7 +20,7 @@
           "permanent_delete": "Permanently delete backups (skip Trash)"
         },
         "data_description": {
-          "permanent_delete": "When enabled, deleting a backup also purges it from pCloud Trash, freeing quota immediately. When disabled (default), deleted backups remain recoverable in Trash."
+          "permanent_delete": "Warning: when enabled, deleting a backup also purges it from pCloud Trash, freeing quota immediately - it cannot be recovered afterwards. When disabled (default), deleted backups remain recoverable in Trash."
         }
       }
     },
@@ -45,7 +45,7 @@
           "permanent_delete": "Permanently delete backups (skip Trash)"
         },
         "data_description": {
-          "permanent_delete": "When enabled, deleting a backup also purges it from pCloud Trash, freeing quota immediately. When disabled (default), deleted backups remain recoverable in Trash."
+          "permanent_delete": "Warning: when enabled, deleting a backup also purges it from pCloud Trash, freeing quota immediately - it cannot be recovered afterwards. When disabled (default), deleted backups remain recoverable in Trash."
         }
       }
     }
