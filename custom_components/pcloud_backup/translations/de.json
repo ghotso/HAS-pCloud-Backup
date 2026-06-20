@@ -17,10 +17,10 @@
         "data": {
           "backup_folder": "Backup-Pfad",
           "upload_timeout_seconds": "Upload-Timeout (Sekunden)",
-          "permanent_delete": "Backups endgültig löschen (Papierkorb überspringen)"
+          "permanent_delete": "Backups dauerhaft löschen"
         },
         "data_description": {
-          "permanent_delete": "Warnung: Wenn aktiviert, wird ein gelöschtes Backup zusätzlich aus dem pCloud-Papierkorb entfernt und das Kontingent sofort freigegeben - es kann danach nicht mehr wiederhergestellt werden. Wenn deaktiviert (Standard), bleibt ein gelöschtes Backup im Papierkorb wiederherstellbar."
+          "permanent_delete": "Warnung: Wenn aktiviert, wird ein gelöschtes Backup zusätzlich aus dem pCloud-Papierkorb entfernt und der Speicherplatz sofort freigegeben - es kann danach nicht mehr wiederhergestellt werden. Wenn deaktiviert (Standard), bleibt ein gelöschtes Backup im Papierkorb wiederherstellbar."
         }
       }
     },
@@ -42,10 +42,10 @@
         "data": {
           "backup_folder": "Backup-Pfad",
           "upload_timeout_seconds": "Upload-Timeout (Sekunden)",
-          "permanent_delete": "Backups endgültig löschen (Papierkorb überspringen)"
+          "permanent_delete": "Backups dauerhaft löschen"
         },
         "data_description": {
-          "permanent_delete": "Warnung: Wenn aktiviert, wird ein gelöschtes Backup zusätzlich aus dem pCloud-Papierkorb entfernt und das Kontingent sofort freigegeben - es kann danach nicht mehr wiederhergestellt werden. Wenn deaktiviert (Standard), bleibt ein gelöschtes Backup im Papierkorb wiederherstellbar."
+          "permanent_delete": "Warnung: Wenn aktiviert, wird ein gelöschtes Backup zusätzlich aus dem pCloud-Papierkorb entfernt und der Speicherplatz sofort freigegeben - es kann danach nicht mehr wiederhergestellt werden. Wenn deaktiviert (Standard), bleibt ein gelöschtes Backup im Papierkorb wiederherstellbar."
         }
       }
     }

@@ -698,8 +698,9 @@ class PCloudBackupAgent(BackupAgent):
 
             if permanent_delete and purge_failed:
                 _LOGGER.warning(
-                    "Deleted backup %s, but it may still be recoverable in "
-                    "pCloud Trash because permanently purging it failed",
+                    "Deleted backup %s, but permanently purging one or more "
+                    "related files from pCloud Trash failed — they may still "
+                    "be recoverable until Trash is emptied",
                     backup_name,
                 )
             else:
