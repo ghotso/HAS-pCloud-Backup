@@ -22,14 +22,41 @@ jobs:
       # hassfest already validates the version format. This only reminds maintainers
       # that merging without a version bump will not create a release (see release.yml).
       - name: Compare manifest version with latest release tag
+        # Same tag selection and version comparison as release.yml, so this
+        # warning always agrees with whether merging creates a release.
         run: |
-          version=$(python3 -c "import json; print(json.load(open('custom_components/pcloud_backup/manifest.json'))['version'])")
-          latest=$(git tag -l 'v*' --sort=-v:refname | head -n1)
-          latest=${latest#v}
-          echo "manifest.json: $version, latest tag: ${latest:-none}"
-          newest=$(printf '%s\n%s\n' "$latest" "$version" | sort -V | tail -n1)
-          if [ -n "$latest" ] && { [ "$latest" = "$version" ] || [ "$newest" != "$version" ]; }; then
-            echo "::warning file=custom_components/pcloud_backup/manifest.json::Version $version is not higher than the latest release v$latest - merging this PR will not create a release. Bump the version in manifest.json if this should be released."
-          else
-            echo "Merging will create release v$version."
-          fi
+          python3 -m pip install --quiet packaging
+          python3 <<'PY'
+          import json
+          import subprocess
+
+          from packaging.version import InvalidVersion, Version
+
+          with open("custom_components/pcloud_backup/manifest.json", encoding="utf-8") as f:
+              version = str(json.load(f)["version"]).strip()
+
+          latest_tag = None
+          tags = subprocess.check_output(
+              ["git", "tag", "-l", "v*", "--sort=-v:refname"], text=True
+          ).split()
+          for tag in tags:
+              try:
+                  Version(tag[1:])
+              except InvalidVersion:
+                  continue
+              latest_tag = tag
+              break
+
+          print(f"manifest.json: {version}, latest tag: {latest_tag or 'none'}")
+          tag_exists = f"v{version}" in tags
+          if tag_exists or (latest_tag and Version(version) <= Version(latest_tag[1:])):
+              print(
+                  "::warning file=custom_components/pcloud_backup/manifest.json::"
+                  f"Version {version} is already tagged or not higher than the latest "
+                  f"release {latest_tag} - "
+                  "merging this PR will not create a release. Bump the version in "
+                  "manifest.json if this should be released."
+              )
+          else:
+              print(f"Merging will create release v{version}.")
+          PY
