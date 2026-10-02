@@ -14,11 +14,13 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.pcloud_backup.api import PCloudAPIError
 from custom_components.pcloud_backup.backup import (
     METADATA_VERSION,
+    BackupMetadataCache,
     PCloudBackupAgent,
     PCloudBackupError,
 )
 from custom_components.pcloud_backup.const import (
     CONF_UPLOAD_TIMEOUT_SECONDS,
+    DATA_METADATA_CACHE,
     DOMAIN,
 )
 
@@ -32,6 +34,7 @@ from .common import (
     PAIRED_FILE_ID,
     PAIRED_KEY,
     PAIRED_METADATA_FILE_ID,
+    listfolder_files,
     load_json_fixture,
     metadata_bytes,
 )
@@ -167,6 +170,131 @@ async def test_unusable_metadata_falls_back_to_file(
     assert paired.name == f"{PAIRED_KEY.replace('_', ' ')}.tar"
     assert paired.size == 1048576
     assert paired.extra_metadata == {}
+
+
+# --- metadata cache -----------------------------------------------------------
+
+
+@pytest.fixture
+def metadata_cache(hass: HomeAssistant) -> BackupMetadataCache:
+    """Install the per-entry metadata cache as entry setup does."""
+    cache = BackupMetadataCache()
+    hass.data[DATA_METADATA_CACHE] = {ENTRY_ID: cache}
+    return cache
+
+
+def _with_metadata_item(**changes) -> list[dict]:
+    files = listfolder_files()
+    for item in files:
+        if item["fileid"] == PAIRED_METADATA_FILE_ID:
+            item.update(changes)
+    return files
+
+
+async def test_metadata_cache_hit_avoids_download(
+    hass: HomeAssistant, agent: PCloudBackupAgent, mock_api, metadata_cache
+) -> None:
+    """Unchanged metadata files are downloaded once, even across new agent objects."""
+    first = await agent.async_list_backups()
+    # HA re-creates agents when it reloads them; the cache lives per entry.
+    second_agent = PCloudBackupAgent(hass, ENTRY_ID, api=mock_api)
+    second = await second_agent.async_list_backups()
+
+    assert first == second
+    assert second[0].backup_id == "a1b2c3d4"
+    mock_api.async_download_file.assert_awaited_once_with(PAIRED_METADATA_FILE_ID)
+    assert mock_api.async_list_folder.await_count == 2
+    assert len(metadata_cache) == 1
+
+
+async def test_metadata_cache_payload_not_mutated(
+    agent: PCloudBackupAgent, mock_api, metadata_cache
+) -> None:
+    """Building the AgentBackup does not alter the cached payload."""
+    await agent.async_list_backups()
+    backups = await agent.async_list_backups()
+
+    assert backups[0].backup_id == "a1b2c3d4"
+    assert backups[0].size == 1048576
+    cached = metadata_cache.get(PAIRED_METADATA_FILE_ID, 2222222222222222222)
+    assert cached == load_json_fixture("metadata_v2_sample.json")
+
+
+async def test_metadata_cache_miss_on_hash_change(
+    agent: PCloudBackupAgent, mock_api, metadata_cache
+) -> None:
+    """A changed content hash invalidates the cached payload."""
+    await agent.async_list_backups()
+    mock_api.async_list_folder.return_value = _with_metadata_item(hash=999)
+    mock_api.async_download_file.return_value = _metadata_with(name="Renamed")
+
+    backups = await agent.async_list_backups()
+
+    assert backups[0].name == "Renamed"
+    assert mock_api.async_download_file.await_count == 2
+
+
+async def test_metadata_without_hash_is_not_cached(
+    agent: PCloudBackupAgent, mock_api, metadata_cache
+) -> None:
+    """Listings without a content hash always download the metadata."""
+    files = _with_metadata_item()
+    for item in files:
+        item.pop("hash", None)
+    mock_api.async_list_folder.return_value = files
+
+    await agent.async_list_backups()
+    await agent.async_list_backups()
+
+    assert mock_api.async_download_file.await_count == 2
+    assert len(metadata_cache) == 0
+
+
+async def test_failed_metadata_load_is_not_cached(
+    agent: PCloudBackupAgent, mock_api, metadata_cache
+) -> None:
+    """A transient failure falls back to file info and is retried next listing."""
+    mock_api.async_download_file.side_effect = [PCloudAPIError("timed out"), metadata_bytes()]
+
+    first = await agent.async_list_backups()
+    second = await agent.async_list_backups()
+
+    assert first[0].backup_id == f"{AGENT_ID}:{PAIRED_KEY}"
+    assert second[0].backup_id == "a1b2c3d4"
+    assert mock_api.async_download_file.await_count == 2
+
+
+async def test_metadata_cache_pruned_to_current_listing(
+    agent: PCloudBackupAgent, mock_api, metadata_cache
+) -> None:
+    """Entries for metadata files that disappeared from the folder are dropped."""
+    metadata_cache.set(9999, 1, {"stale": True})
+    await agent.async_list_backups()
+    assert metadata_cache.get(9999, 1) is None
+    assert len(metadata_cache) == 1
+
+    mock_api.async_list_folder.return_value = [
+        item for item in listfolder_files() if item["fileid"] != PAIRED_METADATA_FILE_ID
+    ]
+    await agent.async_list_backups()
+
+    assert len(metadata_cache) == 0
+
+
+def test_metadata_cache_class() -> None:
+    """get() misses on unknown ids and hash changes; prune()/clear() bound the cache."""
+    cache = BackupMetadataCache()
+    cache.set(1, "a", {"x": 1})
+    cache.set(2, "b", {"y": 2})
+
+    assert cache.get(1, "a") == {"x": 1}
+    assert cache.get(1, "changed") is None
+    assert cache.get(3, "a") is None
+
+    cache.prune([2, 3])
+    assert (cache.get(1, "a"), len(cache)) == (None, 1)
+    cache.clear()
+    assert len(cache) == 0
 
 
 # --- get --------------------------------------------------------------------

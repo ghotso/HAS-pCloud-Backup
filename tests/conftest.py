@@ -9,6 +9,7 @@ from homeassistant.core import HomeAssistant
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.pcloud_backup import api as api_module
 from custom_components.pcloud_backup.api import PCloudAPI
 from custom_components.pcloud_backup.const import DOMAIN
 
@@ -26,6 +27,12 @@ from .common import (
 @pytest.fixture(autouse=True)
 def auto_enable_custom_integrations(enable_custom_integrations: None) -> None:
     """Enable loading custom integrations in all tests."""
+
+
+@pytest.fixture(autouse=True)
+def no_retry_delay(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the retry behaviour but do not actually wait between attempts."""
+    monkeypatch.setattr(api_module, "RETRY_DELAYS", (0.0, 0.0))
 
 
 @pytest.fixture(autouse=True)

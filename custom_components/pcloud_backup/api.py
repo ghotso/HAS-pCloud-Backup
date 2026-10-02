@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 import logging
@@ -26,7 +26,65 @@ DEFAULT_TRANSFER_TOTAL_SECONDS = 86400  # 24 hours
 CONNECT_TIMEOUT = aiohttp.ClientTimeout(connect=30)  # 30 seconds to connect
 UPLOAD_TIMEOUT = aiohttp.ClientTimeout(connect=30, total=DEFAULT_TRANSFER_TOTAL_SECONDS)
 DOWNLOAD_TIMEOUT = aiohttp.ClientTimeout(connect=30, total=DEFAULT_TRANSFER_TOTAL_SECONDS)
-STANDARD_TIMEOUT = aiohttp.ClientTimeout(connect=30, total=120)  # 2 minutes for standard requests
+# Standard (small) API requests: fail fast on a stalled connection so the retry
+# for idempotent requests can kick in instead of waiting minutes.
+STANDARD_TIMEOUT = aiohttp.ClientTimeout(total=60, connect=15, sock_read=30)
+
+# Backoff (seconds) between attempts of idempotent requests that failed with a
+# timeout or connection error: len(RETRY_DELAYS) retries, 3 attempts in total.
+RETRY_DELAYS: tuple[float, ...] = (1.0, 3.0)
+
+
+def _describe_error(err: BaseException) -> str:
+    """Return a non-empty description of an exception."""
+    return str(err) or type(err).__name__
+
+
+def _timeout_message(subject: str, timeout: aiohttp.ClientTimeout | None, err: Exception) -> str:
+    """Return a clear message for a timed out request (never empty)."""
+    limit = None
+    if timeout is not None:
+        limit = timeout.total or timeout.sock_read or timeout.connect
+    message = f"{subject} timed out"
+    if limit:
+        message += f" after {limit:g}s"
+    if detail := str(err):
+        message += f" ({detail})"
+    return message
+
+
+async def _async_retry_transient[T](
+    description: str,
+    func: Callable[[], Awaitable[T]],
+    *,
+    retry: bool,
+) -> T:
+    """Run func, retrying on timeouts and connection errors if retry is set.
+
+    Only use retry=True for idempotent requests. pCloud API errors (non-zero
+    ``result``) are never raised by func, so they are never retried. The last
+    exception is re-raised for the caller to map.
+    """
+    delays = RETRY_DELAYS if retry else ()
+    attempts = len(delays) + 1
+    attempt = 1
+    while True:
+        try:
+            return await func()
+        except (TimeoutError, aiohttp.ClientConnectionError) as err:
+            if attempt >= attempts:
+                raise
+            delay = delays[attempt - 1]
+            _LOGGER.debug(
+                "%s failed (attempt %d of %d): %s; retrying in %gs",
+                description,
+                attempt,
+                attempts,
+                _describe_error(err),
+                delay,
+            )
+            attempt += 1
+            await asyncio.sleep(delay)
 
 
 def _upload_client_timeout(total_seconds: int) -> aiohttp.ClientTimeout:
@@ -79,7 +137,16 @@ class PCloudAPI:
         files: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        """Make an API request."""
+        """Make an API request.
+
+        GET requests are idempotent reads (listfolder, userinfo, getfilelink, ...)
+        and are retried on timeouts and connection errors. POST requests
+        (createfolder, deletefile, uploads) are never retried.
+        """
+        method = method.upper()
+        if method not in ("GET", "POST"):
+            raise PCloudAPIError(f"Unsupported HTTP method: {method}")
+
         session = await self._get_session()
         url = f"{self._base_url}{endpoint}"
 
@@ -106,98 +173,72 @@ class PCloudAPI:
         if "timeout" not in kwargs:
             kwargs["timeout"] = STANDARD_TIMEOUT
 
-        try:
-            if method.upper() == "GET":
+        async def _send() -> Any:
+            if method == "GET":
                 async with session.get(
                     url, params=request_params, headers=headers, **kwargs
                 ) as response:
-                    result = await response.json()
-            elif method.upper() == "POST":
-                if files:
-                    # For file uploads
-                    form_data = aiohttp.FormData()
-                    for key, value in request_params.items():
-                        form_data.add_field(key, str(value))
-                    for key, value in files.items():
-                        if hasattr(value, "read"):
-                            form_data.add_field(
-                                key, value, filename=files.get(f"{key}_name", "file")
-                            )
-                        else:
-                            form_data.add_field(key, value)
-                    async with session.post(
-                        url, data=form_data, headers=headers, **kwargs
-                    ) as response:
-                        result = await response.json()
-                else:
-                    # Regular POST
-                    async with session.post(
-                        url, params=request_params, data=data, headers=headers, **kwargs
-                    ) as response:
-                        result = await response.json()
-            else:
-                raise PCloudAPIError(f"Unsupported HTTP method: {method}")
+                    return await response.json()
+            if files:
+                # For file uploads
+                form_data = aiohttp.FormData()
+                for key, value in request_params.items():
+                    form_data.add_field(key, str(value))
+                for key, value in files.items():
+                    if hasattr(value, "read"):
+                        form_data.add_field(key, value, filename=files.get(f"{key}_name", "file"))
+                    else:
+                        form_data.add_field(key, value)
+                async with session.post(url, data=form_data, headers=headers, **kwargs) as response:
+                    return await response.json()
+            # Regular POST
+            async with session.post(
+                url, params=request_params, data=data, headers=headers, **kwargs
+            ) as response:
+                return await response.json()
 
-            # Check for pCloud API errors
-            if isinstance(result, dict) and result.get("result") != 0:
-                error_code = result.get("result")
-                error_msg = result.get("error", "Unknown error")
-
-                # If auth error, try to refresh token
-                if error_code in (1000, 1001, 1002):  # Common auth errors
-                    _LOGGER.debug("Auth error detected, refreshing token")
-                    try:
-                        await self.auth.refresh_token_if_needed()
-                        # Retry request with new token
-                        auth_token = await self.auth.get_auth_token()
-                        if is_oauth2:
-                            headers["Authorization"] = f"Bearer {auth_token}"
-                        else:
-                            request_params["auth"] = auth_token
-                        # Retry the request
-                        if method.upper() == "GET":
-                            async with session.get(
-                                url, params=request_params, headers=headers, **kwargs
-                            ) as retry_response:
-                                result = await retry_response.json()
-                        elif method.upper() == "POST":
-                            if files:
-                                form_data = aiohttp.FormData()
-                                for key, value in request_params.items():
-                                    form_data.add_field(key, str(value))
-                                for key, value in files.items():
-                                    if hasattr(value, "read"):
-                                        form_data.add_field(
-                                            key, value, filename=files.get(f"{key}_name", "file")
-                                        )
-                                    else:
-                                        form_data.add_field(key, value)
-                                async with session.post(
-                                    url, data=form_data, headers=headers, **kwargs
-                                ) as retry_response:
-                                    result = await retry_response.json()
-                            else:
-                                async with session.post(
-                                    url, params=request_params, data=data, headers=headers, **kwargs
-                                ) as retry_response:
-                                    result = await retry_response.json()
-
-                        # Check result again after retry
-                        if isinstance(result, dict) and result.get("result") != 0:
-                            error_msg = result.get("error", "Unknown error")
-                            raise PCloudAPIError(f"pCloud API error: {error_msg}")
-                    except Exception as refresh_err:
-                        _LOGGER.warning("Failed to refresh token: %s", refresh_err)
-                        raise PCloudAPIError(f"pCloud API error: {error_msg}") from refresh_err
-                else:
-                    raise PCloudAPIError(f"pCloud API error: {error_msg}")
-
-            return result
-
+        try:
+            result = await _async_retry_transient(
+                f"pCloud request {endpoint}", _send, retry=method == "GET"
+            )
+        except TimeoutError as err:
+            raise PCloudAPIError(
+                _timeout_message(f"pCloud request {endpoint}", kwargs["timeout"], err)
+            ) from err
         except aiohttp.ClientError as err:
-            raise PCloudAPIError(f"Network error: {err}") from err
+            raise PCloudAPIError(f"Network error: {_describe_error(err)}") from err
         except Exception as err:
-            raise PCloudAPIError(f"Unexpected error: {err}") from err
+            raise PCloudAPIError(f"Unexpected error: {_describe_error(err)}") from err
+
+        # Check for pCloud API errors
+        if isinstance(result, dict) and result.get("result") != 0:
+            error_code = result.get("result")
+            error_msg = result.get("error", "Unknown error")
+
+            # If auth error, try to refresh token
+            if error_code in (1000, 1001, 1002):  # Common auth errors
+                _LOGGER.debug("Auth error detected, refreshing token")
+                try:
+                    await self.auth.refresh_token_if_needed()
+                    # Retry request with new token
+                    auth_token = await self.auth.get_auth_token()
+                    if is_oauth2:
+                        headers["Authorization"] = f"Bearer {auth_token}"
+                    else:
+                        request_params["auth"] = auth_token
+                    result = await _send()
+
+                    # Check result again after retry
+                    if isinstance(result, dict) and result.get("result") != 0:
+                        error_msg = result.get("error", "Unknown error")
+                        raise PCloudAPIError(f"pCloud API error: {error_msg}")
+                except Exception as refresh_err:
+                    _LOGGER.warning("Failed to refresh token: %s", refresh_err)
+                    raise PCloudAPIError(f"pCloud API error: {error_msg}") from refresh_err
+            else:
+                raise PCloudAPIError(f"pCloud API error: {error_msg}")
+
+        return result
 
     async def async_test_connection(self) -> dict[str, Any]:
         """Test the API connection and return user info."""
@@ -1080,18 +1121,27 @@ class PCloudAPI:
         download_link = await self.async_get_file_link(file_id)
         session = await self._get_session()
 
-        # Download links from pCloud don't require auth token
-        try:
+        async def _download() -> bytes:
+            # Download links from pCloud don't require auth token
             async with session.get(download_link, timeout=STANDARD_TIMEOUT) as response:
                 if response.status != 200:
                     raise PCloudAPIError(f"Download failed with status {response.status}")
                 return await response.read()
+
+        # Downloading is idempotent: retry on timeouts and connection errors.
+        try:
+            return await _async_retry_transient(
+                f"pCloud download of file {file_id}", _download, retry=True
+            )
         except TimeoutError as err:
-            _LOGGER.error("Download timeout for file %d: %s", file_id, err)
-            raise PCloudAPIError(f"Download timeout for file {file_id}") from err
+            message = _timeout_message(f"pCloud download of file {file_id}", STANDARD_TIMEOUT, err)
+            _LOGGER.error("%s", message)
+            raise PCloudAPIError(message) from err
         except aiohttp.ClientError as err:
-            _LOGGER.error("Network error downloading file %d: %s", file_id, err)
-            raise PCloudAPIError(f"Network error downloading file {file_id}: {err}") from err
+            _LOGGER.error("Network error downloading file %d: %s", file_id, _describe_error(err))
+            raise PCloudAPIError(
+                f"Network error downloading file {file_id}: {_describe_error(err)}"
+            ) from err
 
     async def async_download_file_stream(self, file_id: int) -> AsyncIterator[bytes]:
         """Download a file from pCloud and return as an async stream.
@@ -1116,7 +1166,18 @@ class PCloudAPI:
         # Get response WITHOUT async with - we manage lifecycle manually
         # This matches OneDrive's pattern where the response stays open
         # for the entire duration of Home Assistant's restore process
-        response = await session.get(download_link, timeout=DOWNLOAD_TIMEOUT, allow_redirects=True)
+        try:
+            response = await session.get(
+                download_link, timeout=DOWNLOAD_TIMEOUT, allow_redirects=True
+            )
+        except TimeoutError as err:
+            raise PCloudAPIError(
+                _timeout_message(f"pCloud download of file {file_id}", DOWNLOAD_TIMEOUT, err)
+            ) from err
+        except aiohttp.ClientError as err:
+            raise PCloudAPIError(
+                f"Network error downloading file {file_id}: {_describe_error(err)}"
+            ) from err
 
         if response.status != 200:
             response.close()
@@ -1194,13 +1255,19 @@ class PCloudAPI:
                     )
 
         except TimeoutError as err:
-            _LOGGER.error(
-                "Download timeout for file %d after %d seconds", file_id, DOWNLOAD_TIMEOUT.total
-            )
-            raise PCloudAPIError(f"Download timeout for file {file_id}") from err
+            message = _timeout_message(f"pCloud download of file {file_id}", DOWNLOAD_TIMEOUT, err)
+            _LOGGER.error("%s", message)
+            raise PCloudAPIError(message) from err
         except aiohttp.ClientError as err:
-            _LOGGER.error("Network error downloading file %d: %s", file_id, err, exc_info=True)
-            raise PCloudAPIError(f"Network error downloading file {file_id}: {err}") from err
+            _LOGGER.error(
+                "Network error downloading file %d: %s",
+                file_id,
+                _describe_error(err),
+                exc_info=True,
+            )
+            raise PCloudAPIError(
+                f"Network error downloading file {file_id}: {_describe_error(err)}"
+            ) from err
         except OSError as err:
             _LOGGER.error("Failed to write file %s: %s", file_path, err)
             raise PCloudAPIError(f"Failed to write file {file_path}: {err}") from err

@@ -14,6 +14,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.pcloud_backup import async_migrate_entry
 from custom_components.pcloud_backup.api import PCloudAPI, PCloudAPIError
 from custom_components.pcloud_backup.backup import (
+    BackupMetadataCache,
     PCloudBackupAgent,
     async_get_backup_agents,
     async_register_backup_agents_listener,
@@ -21,6 +22,7 @@ from custom_components.pcloud_backup.backup import (
 from custom_components.pcloud_backup.const import (
     CONF_BACKUP_FOLDER,
     DATA_BACKUP_AGENT_LISTENERS,
+    DATA_METADATA_CACHE,
     DOMAIN,
 )
 
@@ -104,6 +106,7 @@ async def test_unload_entry(
 
     assert config_entry.state is ConfigEntryState.NOT_LOADED
     assert ENTRY_ID not in hass.data[DOMAIN]
+    assert ENTRY_ID not in hass.data[DATA_METADATA_CACHE]
     # HA removes runtime_data after unload; the integration also resets it.
     assert getattr(config_entry, "runtime_data", None) is None
     mock_pcloud["async_close"].assert_awaited_once()
@@ -130,6 +133,26 @@ async def test_migrate_current_version_is_noop(
 ) -> None:
     """Current (v2) entries need no migration."""
     assert await async_migrate_entry(hass, config_entry) is True
+
+
+async def test_metadata_cache_lifecycle(
+    hass: HomeAssistant, config_entry: MockConfigEntry, mock_pcloud: dict[str, AsyncMock]
+) -> None:
+    """Setup creates a per-entry metadata cache; unload drops it, reload starts empty."""
+    assert await _setup(hass, config_entry)
+    cache = hass.data[DATA_METADATA_CACHE][ENTRY_ID]
+    assert isinstance(cache, BackupMetadataCache)
+    # The sensor refresh during setup already listed the backups and cached metadata.
+    assert len(cache) == 1
+    mock_pcloud["async_download_file"].assert_awaited_once()
+
+    assert await hass.config_entries.async_reload(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    new_cache = hass.data[DATA_METADATA_CACHE][ENTRY_ID]
+    assert new_cache is not cache
+    assert len(cache) == 0
+    assert mock_pcloud["async_download_file"].await_count == 2
 
 
 # --- Backup agent registration ---------------------------------------------

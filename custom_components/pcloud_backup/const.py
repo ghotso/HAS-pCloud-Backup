@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from homeassistant.util.hass_dict import HassKey
+
+if TYPE_CHECKING:
+    from .backup import BackupMetadataCache
 
 DOMAIN = "pcloud_backup"
 
@@ -53,3 +57,6 @@ ATTR_USED_SPACE = "used_space"
 DATA_BACKUP_AGENT_LISTENERS: HassKey[list[Callable[[], None]]] = HassKey(
     f"{DOMAIN}.backup_agent_listeners"
 )
+
+# Parsed backup metadata cache per config entry id (see backup.BackupMetadataCache)
+DATA_METADATA_CACHE: HassKey[dict[str, BackupMetadataCache]] = HassKey(f"{DOMAIN}.metadata_cache")

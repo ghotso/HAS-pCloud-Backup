@@ -9,9 +9,11 @@ from homeassistant.core import HomeAssistant, callback
 
 from .api import PCloudAPI
 from .auth import create_auth
+from .backup import BackupMetadataCache
 from .const import (
     CONF_REGION,
     DATA_BACKUP_AGENT_LISTENERS,
+    DATA_METADATA_CACHE,
     DOMAIN,
     PLATFORMS,
 )
@@ -73,6 +75,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Store API instance
     hass.data[DOMAIN][entry.entry_id] = api
     entry.runtime_data = api
+    # Backup agents are re-created whenever HA reloads agents; keep the parsed
+    # metadata cache per entry so it survives that and is dropped on unload.
+    hass.data.setdefault(DATA_METADATA_CACHE, {})[entry.entry_id] = BackupMetadataCache()
 
     # Notify backup manager listeners on every state change. Notifying only
     # during setup is too early: the entry is still SETUP_IN_PROGRESS, so
@@ -97,6 +102,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         api = hass.data[DOMAIN].pop(entry.entry_id, None)
         if api:
             await api.async_close()
+        if (cache := hass.data.get(DATA_METADATA_CACHE, {}).pop(entry.entry_id, None)) is not None:
+            cache.clear()
         entry.runtime_data = None
 
     return unload_ok

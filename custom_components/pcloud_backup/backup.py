@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Callable, Coroutine
+from collections.abc import AsyncIterator, Callable, Collection, Coroutine
 import json
 import logging
 from pathlib import Path
@@ -23,6 +23,7 @@ from .const import (
     CONF_BACKUP_FOLDER,
     CONF_UPLOAD_TIMEOUT_SECONDS,
     DATA_BACKUP_AGENT_LISTENERS,
+    DATA_METADATA_CACHE,
     DEFAULT_BACKUP_FOLDER,
     DEFAULT_UPLOAD_TIMEOUT_SECONDS,
     DOMAIN,
@@ -72,6 +73,42 @@ def async_register_backup_agents_listener(
                 hass.data.pop(DATA_BACKUP_AGENT_LISTENERS)
 
     return remove_listener
+
+
+class BackupMetadataCache:
+    """Parsed .metadata.json payloads keyed by pCloud file id and content hash.
+
+    Metadata files are written once and never modified, so a listfolder entry
+    with an unchanged (fileid, hash) does not need to be downloaded again.
+    """
+
+    def __init__(self) -> None:
+        """Initialize an empty cache."""
+        self._entries: dict[Any, tuple[Any, dict[str, Any]]] = {}
+
+    def __len__(self) -> int:
+        """Return the number of cached payloads."""
+        return len(self._entries)
+
+    def get(self, file_id: Any, content_hash: Any) -> dict[str, Any] | None:
+        """Return the cached payload, or None if missing or the hash changed."""
+        cached = self._entries.get(file_id)
+        if cached is None or cached[0] != content_hash:
+            return None
+        return cached[1]
+
+    def set(self, file_id: Any, content_hash: Any, payload: dict[str, Any]) -> None:
+        """Store a parsed payload."""
+        self._entries[file_id] = (content_hash, payload)
+
+    def prune(self, file_ids: Collection[Any]) -> None:
+        """Drop entries whose file id is not in file_ids (keeps the cache bounded)."""
+        for file_id in self._entries.keys() - set(file_ids):
+            del self._entries[file_id]
+
+    def clear(self) -> None:
+        """Drop all entries."""
+        self._entries.clear()
 
 
 class PCloudBackupError(BackupAgentError):
@@ -163,9 +200,19 @@ class PCloudBackupAgent(BackupAgent):
         file_id = metadata_item.get("fileid")
         if file_id is None:
             return None
+        content_hash = metadata_item.get("hash")
+        cache = self._metadata_cache if content_hash is not None else None
         try:
-            metadata_bytes = await self.api.async_download_file(file_id)
-            payload = json.loads(metadata_bytes.decode("utf-8"))
+            cached = cache.get(file_id, content_hash) if cache is not None else None
+            if cached is None:
+                metadata_bytes = await self.api.async_download_file(file_id)
+                cached = json.loads(metadata_bytes.decode("utf-8"))
+                # Only successfully parsed payloads are cached; failed loads are
+                # retried on the next listing.
+                if cache is not None and isinstance(cached, dict):
+                    cache.set(file_id, content_hash, cached)
+            # Work on a copy: the cached payload must stay untouched.
+            payload = dict(cached)
             metadata_version = payload.pop("metadata_version", None)
             if metadata_version not in SUPPORTED_METADATA_VERSIONS:
                 _LOGGER.debug(
@@ -262,6 +309,8 @@ class PCloudBackupAgent(BackupAgent):
     ]:
         """Collect backups and return lookup maps."""
         backup_files, metadata_files = await self._async_get_folder_items(folder_id)
+        if (cache := self._metadata_cache) is not None:
+            cache.prune({item.get("fileid") for item in metadata_files.values()})
         backups_by_key: dict[str, AgentBackup] = {}
         backup_id_index: dict[str, str] = {}
 
@@ -323,6 +372,11 @@ class PCloudBackupAgent(BackupAgent):
                 raise PCloudBackupError("pCloud API not initialized")
             self._api = api
         return self._api
+
+    @property
+    def _metadata_cache(self) -> BackupMetadataCache | None:
+        """Return the metadata cache of the config entry (None if not set up)."""
+        return self.hass.data.get(DATA_METADATA_CACHE, {}).get(self.config_entry_id)
 
     def _extract_backup_filename(self, backup_name_or_id: str) -> str:
         """Extract the actual filename from backup_id or backup_name.

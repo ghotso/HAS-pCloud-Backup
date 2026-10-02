@@ -8,6 +8,7 @@
       {
         "name": "Automatic_backup_2025.1.0_2025-01-02_03.00_00000000.tar",
         "fileid": 101,
+        "hash": 1111111111111111111,
         "size": 1048576,
         "isfolder": false,
         "modified": "Thu, 02 Jan 2025 03:05:00 +0000"
@@ -15,6 +16,7 @@
       {
         "name": "Automatic_backup_2025.1.0_2025-01-02_03.00_00000000.metadata.json",
         "fileid": 102,
+        "hash": 2222222222222222222,
         "size": 812,
         "isfolder": false,
         "modified": "Thu, 02 Jan 2025 03:05:01 +0000"
@@ -22,6 +24,7 @@
       {
         "name": "Manual_backup_2024-12-01.tar",
         "fileid": 201,
+        "hash": 3333333333333333333,
         "size": 524288,
         "isfolder": false,
         "modified": 1733022000
