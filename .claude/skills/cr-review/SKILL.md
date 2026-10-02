@@ -107,8 +107,20 @@ Triage is never delegated: no sub-agent decides whether a finding is real.
    so explicitly in the reply rather than silently skipping it.
 3. **Give each finding one verdict**: real, false positive,
    safety-weakening (a false positive that asks to loosen a safety rule), or
-   deferred (real but out of scope for this PR — see below). A false
-   positive or deferred finding is not touched in the code.
+   deferred. A false positive or deferred finding is not touched in the code.
+
+**Deferred is narrow.** It is only for a finding about something this PR
+does not ship: code or behaviour outside the PR's changes and outside what
+the merged release would contain (for example a pre-existing problem in an
+untouched module, or a feature request). **A real bug in code this PR
+ships is fixed in this PR — never deferred** because it is unlikely,
+"practically unreachable", low severity, or in fragile/sensitive code.
+Fragile or sensitive code means the fix takes the delegated path with
+tests and verification, not that it waits. If you believe a real finding
+in shipped code genuinely can't be fixed safely in this round, don't decide
+that yourself: stop and ask the maintainer (`AskUserQuestion`) with the
+finding, the risk of fixing it now and the risk of shipping it, before
+filing anything or replying.
 
 ### Sensitive scope
 
@@ -241,12 +253,14 @@ No CodeRabbit comment is left unanswered. For each:
   `gh pr comment <n> --body-file <file>`, quoting which point each answers.
 - **False positive / safety-weakening** → reply with the concrete reason
   (cite the code, test or doc that shows the concern doesn't apply).
-- **Deferred / out of scope for this PR** → reply with the issue number it
-  now lives on (see next section).
+- **Deferred** (only in the narrow sense under "Triage every finding": not
+  shipped by this PR) → reply with the issue number it now lives on (see
+  next section).
 
 ## Findings outside this PR's scope
 
-Before filing anything, check for an existing open issue that already covers
+This section is only for findings that passed the narrow "Deferred" test —
+never for a real bug in code this PR ships. Before filing anything, check for an existing open issue that already covers
 it: `gh issue list --state open --search "<keywords>"`. If one exists, say so
 in the reply and stop there — don't duplicate. Otherwise create one with
 `gh issue create` (labels `bug` or `enhancement`, assignee `ghotso`) whose
@@ -263,6 +277,8 @@ anything left undone and why.
 ## Non-negotiables
 
 - Every real behaviour fix ships with its test.
+- A real bug in code the PR ships is fixed in the PR, or the maintainer
+  decides otherwise — never deferred on your own judgement.
 - No test is weakened, skipped or deleted to make a finding "pass".
 - No sensitive-scope rule is loosened because a CodeRabbit suggestion
   pointed that way.
