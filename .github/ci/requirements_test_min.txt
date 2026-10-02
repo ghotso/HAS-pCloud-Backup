@@ -1,0 +1,6 @@
+# Test dependencies for the oldest supported Home Assistant version (hacs.json: 2025.3.0).
+# pytest-homeassistant-custom-component 0.13.221 pins homeassistant==2025.3.0 (and pytest).
+# Keep this in sync with "homeassistant" in hacs.json when the minimum version changes.
+# Lives outside the repo root on purpose so Dependabot (pip, directory "/") does not bump these pins.
+pytest-homeassistant-custom-component==0.13.221
+aioresponses==0.7.9

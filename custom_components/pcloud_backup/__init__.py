@@ -1,16 +1,20 @@
 """The pCloud Backup integration."""
+
 from __future__ import annotations
 
 import logging
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 
-from .api import PCloudAPI
+from .api import PCloudAPI, PCloudAuthError
 from .auth import create_auth
+from .backup import BackupMetadataCache
 from .const import (
     CONF_REGION,
     DATA_BACKUP_AGENT_LISTENERS,
+    DATA_METADATA_CACHE,
     DOMAIN,
     PLATFORMS,
 )
@@ -33,11 +37,11 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
         _LOGGER.warning(
             "Config entry %s uses old digest authentication. "
             "Please remove and re-add the integration to use OAuth2.",
-            config_entry.title
+            config_entry.title,
         )
         # Return False to indicate migration failed (user needs to re-add)
         return False
-    
+
     return True
 
 
@@ -52,7 +56,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if "token" not in entry.data:
         _LOGGER.error("Config entry missing OAuth2 token. Please re-add the integration.")
         return False
-    
+
     auth = create_auth(
         hass=hass,
         region=region,
@@ -62,19 +66,31 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Create API instance
     api = PCloudAPI(hass=hass, region=region, auth=auth)
 
-    # Verify connection
+    # Verify connection. Single attempt: on failure Home Assistant retries the
+    # setup in the background (ConfigEntryNotReady) instead of blocking startup
+    # and reloads with in-line retries, or leaving the entry failed for good.
     try:
-        await api.async_test_connection()
+        await api.async_test_connection(retry=False)
+    except PCloudAuthError as err:
+        # Revoked/invalid token: let Home Assistant start the reauth flow.
+        await api.async_close()
+        raise ConfigEntryAuthFailed(str(err)) from err
     except Exception as err:
-        _LOGGER.error("Failed to connect to pCloud: %s", err)
-        return False
+        await api.async_close()
+        raise ConfigEntryNotReady(f"Failed to connect to pCloud: {err}") from err
 
     # Store API instance
     hass.data[DOMAIN][entry.entry_id] = api
     entry.runtime_data = api
+    # Backup agents are re-created whenever HA reloads agents; keep the parsed
+    # metadata cache per entry so it survives that and is dropped on unload.
+    hass.data.setdefault(DATA_METADATA_CACHE, {})[entry.entry_id] = BackupMetadataCache()
 
-    # Notify backup manager listeners that agents may have changed
-    _notify_backup_agent_listeners(hass)
+    # Notify backup manager listeners on every state change. Notifying only
+    # during setup is too early: the entry is still SETUP_IN_PROGRESS, so
+    # async_get_backup_agents (which uses async_loaded_entries) would skip it
+    # and the agent would disappear after a reload (e.g. options change).
+    entry.async_on_unload(entry.async_on_state_change(lambda: _notify_backup_agent_listeners(hass)))
 
     # Register update listener
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
@@ -93,8 +109,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         api = hass.data[DOMAIN].pop(entry.entry_id, None)
         if api:
             await api.async_close()
+        if (cache := hass.data.get(DATA_METADATA_CACHE, {}).pop(entry.entry_id, None)) is not None:
+            cache.clear()
         entry.runtime_data = None
-        _notify_backup_agent_listeners(hass)
 
     return unload_ok
 

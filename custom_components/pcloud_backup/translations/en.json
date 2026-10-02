@@ -16,12 +16,12 @@
         "description": "Enter the folder path in pCloud where backups will be stored. The folder will be created if it doesn't exist. Set upload timeout for large backups over slow uplinks.",
         "data": {
           "backup_folder": "Backup Folder Path",
-          "upload_timeout_seconds": "Upload timeout (seconds)",
-          "permanent_delete": "Permanently delete backups (skip Trash)"
-        },
-        "data_description": {
-          "permanent_delete": "Warning: when enabled, deleting a backup also purges it from pCloud Trash, freeing quota immediately - it cannot be recovered afterwards. When disabled (default), deleted backups remain recoverable in Trash."
+          "upload_timeout_seconds": "Upload timeout (seconds)"
         }
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate pCloud",
+        "description": "pCloud no longer accepts the stored access token (for example because app access was removed or the password was changed). Sign in to the same pCloud account again so backups keep working."
       }
     },
     "error": {
@@ -31,7 +31,10 @@
       "unknown": "Unexpected error occurred: {error}"
     },
     "abort": {
-      "already_configured": "This pCloud account is already configured."
+      "already_configured": "This pCloud account is already configured.",
+      "reauth_successful": "Re-authentication was successful.",
+      "wrong_account": "You signed in to a different pCloud account. Sign in with the account this integration was set up with.",
+      "cannot_connect": "Failed to connect to pCloud. Please try again later."
     }
   },
   "options": {
@@ -41,11 +44,7 @@
         "description": "Configure the backup folder path in pCloud and upload timeout for large backups.",
         "data": {
           "backup_folder": "Backup Folder Path",
-          "upload_timeout_seconds": "Upload timeout (seconds)",
-          "permanent_delete": "Permanently delete backups (skip Trash)"
-        },
-        "data_description": {
-          "permanent_delete": "Warning: when enabled, deleting a backup also purges it from pCloud Trash, freeing quota immediately - it cannot be recovered afterwards. When disabled (default), deleted backups remain recoverable in Trash."
+          "upload_timeout_seconds": "Upload timeout (seconds)"
         }
       }
     }

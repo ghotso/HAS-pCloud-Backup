@@ -4,14 +4,27 @@ permissions:
 
 on:
   push:
+    branches: [main, dev]
   pull_request:
+  # Weekly run catches new upstream hassfest rules before the next PR does.
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
+  # Job name is a required status check on main - do not rename.
   hassfest:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false # nothing after checkout needs the token
 
       - name: Hassfest validation
-        uses: home-assistant/actions/hassfest@master
+        uses: home-assistant/actions/hassfest@master # upstream recommends tracking master; weekly run catches changes

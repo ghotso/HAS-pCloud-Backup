@@ -6,23 +6,57 @@ on:
   pull_request:
     branches:
       - main
-      - master
 
 jobs:
   version-check:
-    name: Check Version Consistency
+    name: Check Release Version
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # needs tags
+          persist-credentials: false # nothing after checkout needs the token
 
-      - name: Check manifest version format
+      # hassfest already validates the version format. This only reminds maintainers
+      # that merging without a version bump will not create a release (see release.yml).
+      - name: Compare manifest version with latest release tag
+        # Same tag selection and version comparison as release.yml, so this
+        # warning always agrees with whether merging creates a release.
         run: |
-          VERSION=$(grep -o '"version": "[^"]*"' custom_components/pcloud_backup/manifest.json | cut -d'"' -f4)
-          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9-]+(\.[0-9]+)?)?$'; then
-            echo "❌ Invalid version format in manifest.json: $VERSION"
-            echo "Version must follow SemVer format: MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH-PRERELEASE"
-            exit 1
-          fi
-          echo "✅ Version format is valid: $VERSION"
+          python3 -m pip install --quiet packaging
+          python3 <<'PY'
+          import json
+          import subprocess
 
+          from packaging.version import InvalidVersion, Version
+
+          with open("custom_components/pcloud_backup/manifest.json", encoding="utf-8") as f:
+              version = str(json.load(f)["version"]).strip()
+
+          latest_tag = None
+          tags = subprocess.check_output(
+              ["git", "tag", "-l", "v*", "--sort=-v:refname"], text=True
+          ).split()
+          for tag in tags:
+              try:
+                  Version(tag[1:])
+              except InvalidVersion:
+                  continue
+              latest_tag = tag
+              break
+
+          print(f"manifest.json: {version}, latest tag: {latest_tag or 'none'}")
+          tag_exists = f"v{version}" in tags
+          if tag_exists or (latest_tag and Version(version) <= Version(latest_tag[1:])):
+              print(
+                  "::warning file=custom_components/pcloud_backup/manifest.json::"
+                  f"Version {version} is already tagged or not higher than the latest "
+                  f"release {latest_tag} - "
+                  "merging this PR will not create a release. Bump the version in "
+                  "manifest.json if this should be released."
+              )
+          else:
+              print(f"Merging will create release v{version}.")
+          PY

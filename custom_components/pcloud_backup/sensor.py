@@ -1,8 +1,9 @@
 """Sensor platform for pCloud Backup monitoring."""
+
 from __future__ import annotations
 
-import logging
 from datetime import datetime, timedelta
+import logging
 from typing import Any
 
 from homeassistant.components.sensor import (
@@ -12,12 +13,13 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity, DataUpdateCoordinator
 from homeassistant.helpers.typing import StateType
+from homeassistant.helpers.update_coordinator import CoordinatorEntity, DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
-from .api import PCloudAPI, PCloudAPIError
+from .api import PCloudAPI, PCloudAPIError, PCloudAuthError
 from .const import (
     ATTR_ACCOUNT_USED_SPACE,
     ATTR_FREE_SPACE,
@@ -109,8 +111,7 @@ async def async_setup_entry(
     await coordinator.async_config_entry_first_refresh()
 
     async_add_entities(
-        PCloudBackupSensor(coordinator, description, entry)
-        for description in SENSOR_TYPES
+        PCloudBackupSensor(coordinator, description, entry) for description in SENSOR_TYPES
     )
 
 
@@ -132,9 +133,9 @@ class PCloudBackupCoordinator(DataUpdateCoordinator):
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data from pCloud API."""
-        try:
-            from .backup import PCloudBackupAgent
+        from .backup import PCloudBackupAgent, PCloudBackupAuthError
 
+        try:
             backup_agent = PCloudBackupAgent(self.hass, self.entry.entry_id)
             # Access API property to ensure it's loaded
             _ = backup_agent.api
@@ -148,9 +149,7 @@ class PCloudBackupCoordinator(DataUpdateCoordinator):
                 _LOGGER.debug("Latest backup: %s", latest_backup.name)
                 last_backup_str = latest_backup.date
                 try:
-                    last_backup_dt = datetime.fromisoformat(
-                        last_backup_str.replace("Z", "+00:00")
-                    )
+                    last_backup_dt = datetime.fromisoformat(last_backup_str.replace("Z", "+00:00"))
                     if last_backup_dt.tzinfo is None:
                         last_backup_dt = last_backup_dt.replace(tzinfo=dt_util.DEFAULT_TIME_ZONE)
                     _LOGGER.debug("Latest backup date: %s", last_backup_dt.isoformat())
@@ -178,6 +177,8 @@ class PCloudBackupCoordinator(DataUpdateCoordinator):
                     used_quota,
                     free_space,
                 )
+            except PCloudAuthError:
+                raise
             except Exception as err:
                 _LOGGER.warning("Failed to fetch userinfo: %s", err)
                 free_space = None
@@ -196,6 +197,9 @@ class PCloudBackupCoordinator(DataUpdateCoordinator):
             _LOGGER.debug("Sensor data: %s", result)
             return result
 
+        except (PCloudAuthError, PCloudBackupAuthError) as err:
+            # Revoked/invalid token: the coordinator starts the reauth flow.
+            raise ConfigEntryAuthFailed(str(err)) from err
         except PCloudAPIError as err:
             _LOGGER.error("Error updating pCloud backup data: %s", err)
             self._last_sync_status = "Failed"
@@ -318,4 +322,3 @@ class PCloudBackupSensor(CoordinatorEntity, SensorEntity):
         if self.entity_description.key == "last_sync_status" and self.coordinator._last_sync_error:
             return {"error": self.coordinator._last_sync_error}
         return None
-

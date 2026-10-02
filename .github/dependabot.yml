@@ -1,0 +1,25 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: dev
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: ci
+    groups:
+      github-actions:
+        patterns: ["*"]
+
+  # requirements_test.txt only. The minimum-HA pins in .github/ci/ are intentionally
+  # outside this directory and must only change together with hacs.json.
+  - package-ecosystem: pip
+    directory: /
+    target-branch: dev
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: test
+    groups:
+      test-dependencies:
+        patterns: ["*"]

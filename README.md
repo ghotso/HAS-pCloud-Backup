@@ -12,7 +12,7 @@ A native Home Assistant Backup Agent integration for pCloud, enabling users to s
 ## Features
 
 - ✅ **OAuth2 Authentication** - Secure OAuth2 authentication with full 2FA support
-- ✅ **Region Support** - Choose between EU or US pCloud datacenters
+- ✅ **Region Support** - Works with both EU and US pCloud datacenters (detected automatically)
 - ✅ **Automatic Uploads** - Integrates seamlessly with Home Assistant's backup system
 - ✅ **Backup Management** - List, download, and delete backups from pCloud directly in Home Assistant
 - ✅ **Monitoring Sensors** - Track backup count, last backup time, and sync status
@@ -26,15 +26,13 @@ A native Home Assistant Backup Agent integration for pCloud, enabling users to s
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=ghotso&repository=HAS-pCloud-Backup)
 
-1. Open **HACS** in Home Assistant
-2. Go to **Integrations** tab
-3. Click **Explore & Download Repositories** (bottom right)
-4. Search for **"pCloud Backup"**
-5. Click on the integration and then click **Download**
-6. **Restart Home Assistant** (required after installation)
-7. After restart, go to **Settings** → **Devices & Services**
-8. Click **Add Integration** (bottom right)
-9. Search for **"pCloud Backup"** and select it
+1. Open **HACS** in Home Assistant (or use the button above)
+2. Search for **"pCloud Backup"** and open it
+3. Click **Download**
+4. **Restart Home Assistant** (required after installation)
+5. After restart, go to **Settings** → **Devices & Services**
+6. Click **Add Integration** (bottom right)
+7. Search for **"pCloud Backup"** and select it
 
 ### Manual Installation
 
@@ -68,7 +66,7 @@ The integration uses OAuth2 authentication for secure access to your pCloud acco
 2. **Log in** to your pCloud account (works with 2FA-enabled accounts)
 3. Review the permissions and click **Allow** or **Authorize** to grant access
 4. You'll be redirected back to the cloud Home Assistant redirect page
-5. If not already entered, enter the address to your Homeassistant installation and click on link account.
+5. If not already entered, enter the address of your Home Assistant installation and click **Link account**
 
 #### Step 3: Configure Storage Path & Upload Timeout
 
@@ -78,7 +76,9 @@ The integration uses OAuth2 authentication for secure access to your pCloud acco
 4. You'll also set **Upload timeout (seconds)** — this is the maximum wall‑clock time allowed for **one** backup upload over HTTPS (large backups on slow links need a higher value). **Default: 86400 seconds (24 hours).** Allowed range: **600–172800** seconds (10 minutes–48 hours).
 5. Click **Submit**
 
-> **Note:** You can change **both** the backup folder path and the **upload timeout (seconds)** at any time under **Settings** → **Devices & services** → **pCloud Backup** → **Configure**. The default timeout remains **86400** seconds unless you change it. When you save, Home Assistant reloads the integration entry automatically so new values apply to the next backup.
+> **Note:** You can change the backup folder path and the upload timeout at any time under **Settings** → **Devices & services** → **pCloud Backup** → **Configure**. When you save, Home Assistant reloads the integration entry automatically so new values apply to the next backup operation.
+>
+> Changing the **folder path** does not move existing backups. Backups already stored in the old folder will no longer be listed in Home Assistant — move them to the new folder in pCloud if you want to keep them visible.
 
 #### Step 4: Complete Setup
 
@@ -92,8 +92,8 @@ The integration uses OAuth2 authentication for secure access to your pCloud acco
 ### What Happens Next?
 
 Once configured, the integration will:
-- ✅ Appear in **Settings** → **System** → **Backups** as a backup destination
-- ✅ Automatically upload all Home Assistant backups to pCloud
+- ✅ Appear in **Settings** → **System** → **Backups** as a backup location you can select
+- ✅ Upload backups to pCloud whenever pCloud is selected as a location (for automatic and manual backups)
 - ✅ Display pCloud backups alongside local backups in the backup manager
 - ✅ Provide sensors for monitoring backup status
 
@@ -101,7 +101,7 @@ Once configured, the integration will:
 
 **OAuth2 Redirect URI:** The integration uses Home Assistant's OAuth2 redirect system. For Home Assistant Cloud users, the redirect URI is `https://my.home-assistant.io/redirect/oauth`. For local instances, Home Assistant automatically handles the redirect URI.
 
-**Region Detection:** The integration automatically detects whether your pCloud account uses the EU or US datacenter based on the OAuth2 callback response. No manual configuration needed!
+**Region Detection:** The integration automatically detects whether your pCloud account uses the EU or US datacenter based on the OAuth2 callback response. No manual configuration needed — the detected region is shown in the integration title, e.g. *pCloud Backup (EU)*.
 
 **Upload timeout:** The maximum duration (in **seconds**) for a single backup upload is configurable during setup and at any time under the integration’s **Configure** dialog. Default **86400** (24 hours); allowed **600–172800** (10 minutes–48 hours). Raise it if very large backups fail with upload timeouts on a slow uplink.
 
@@ -109,12 +109,14 @@ Once configured, the integration will:
 
 The integration provides the following sensors:
 
-- `sensor.pcloud_remote_backup_count` - Number of backups stored in pCloud
-- `sensor.pcloud_last_remote_backup` - Timestamp of the last successful backup upload
-- `sensor.pcloud_last_sync_status` - Status of the last sync operation (OK/Failed)
-- `sensor.pcloud_free_space` - Free space available in your pCloud account (account-wide quota)
-- `sensor.pcloud_used_space_by_backups` - Storage used by your Home Assistant backups in the pCloud backup folder
-- `sensor.pcloud_account_used_space` - Total storage used across your entire pCloud account
+- `sensor.remote_backup_count` - Number of backups stored in pCloud
+- `sensor.last_remote_backup` - Timestamp of the last successful backup upload
+- `sensor.last_sync_status` - Status of the last sync operation (OK/Failed)
+- `sensor.free_space` - Free space available in your pCloud account (account-wide quota)
+- `sensor.used_space_by_backups` - Storage used by your Home Assistant backups in the pCloud backup folder
+- `sensor.account_used_space` - Total storage used across your entire pCloud account
+
+> **Note:** These are the default entity IDs on a new installation. If another integration already uses the same ID, Home Assistant adds a suffix (e.g. `sensor.free_space_2`). You can look up or rename the actual IDs under **Settings** → **Devices & services** → **Entities**.
 
 ## Usage
 
@@ -123,10 +125,17 @@ The integration provides the following sensors:
 1. Go to **Settings** → **System** → **Backups**
 2. Click the **three dots menu** (⋮) in the top right corner
 3. Select **Create Backup**
-4. The backup will be created locally and automatically uploaded to pCloud
+4. Select **pCloud** as one of the backup locations
+5. The backup is created and uploaded to pCloud
 
-The integration automatically uploads every Home Assistant backup to pCloud.  
+For automatic backups, select **pCloud** as a location under **Settings** → **System** → **Backups** → **Backup settings**.
 Retention, encryption, scheduling and all other logic are entirely handled by the standard Home Assistant backup system—pCloud simply provides the remote storage destination.
+
+### Deleting Backups
+
+Backups deleted in Home Assistant (manually or by the backup retention settings) are moved to the **pCloud Trash**, together with their metadata file. They stay recoverable there — and keep counting against your pCloud storage — until the Trash is emptied in pCloud or the items expire according to your pCloud plan.
+
+> **Note:** The integration cannot empty the pCloud Trash for you: pCloud's Trash API does not accept OAuth tokens, which this integration uses for authentication. Empty the Trash in the pCloud web or app if you need the space back immediately.
 
 ### Viewing Backups
 
@@ -143,7 +152,7 @@ All backups (both local and pCloud) are displayed in **Settings** → **System**
 
 ## Requirements
 
-- Home Assistant 2025.1 or later
+- Home Assistant 2025.3 or later
 - pCloud account (works with 2FA-enabled accounts)
 - Active internet connection for backup synchronization
 
@@ -157,7 +166,7 @@ OAuth2 provides industry-standard secure authentication:
 
 - **OAuth2 Flow**: Uses the authorization code flow for secure token exchange
 - **HTTPS Encryption**: All API communication uses HTTPS (SSL/TLS)
-- **Secure Token Storage**: Access tokens are stored securely in Home Assistant's credential store
+- **Token Storage**: OAuth2 tokens are stored in the integration's config entry in Home Assistant
 - **2FA Support**: Fully compatible with pCloud accounts that have two-factor authentication enabled
 - **No Password Storage**: Your pCloud password is never stored or transmitted to Home Assistant
 
@@ -169,12 +178,11 @@ The integration follows pCloud's OAuth2 flow and ensures your credentials remain
 
 - **OAuth2 authorization failed**: Make sure you complete the authorization flow in your browser
 - **Authentication failed**: Check that your pCloud account is active and accessible
-- **Region mismatch**: The integration automatically detects your region, but you can verify it matches your account (EU vs US)
-- **Token expired**: If you encounter authentication errors, try removing and re-adding the integration
+- **Region**: The region is detected automatically; the integration title shows which one is in use, e.g. *pCloud Backup (EU)*
+- **Re-authentication required**: pCloud access tokens do not expire, but they stop working if access is revoked (for example after a password change or after removing the app's access in your pCloud account settings). Home Assistant then shows *Re-authentication required* for the integration under **Settings → Devices & services**; select **Re-authenticate** and sign in to the same pCloud account again. Your backup folder and options are kept
 
 ### Connection Issues
 
-- Verify your pCloud region selection matches your account (EU vs US datacenter)
 - Check your internet connection
 - Review Home Assistant logs for detailed error messages
 - Ensure your pCloud account is active and accessible
@@ -217,20 +225,42 @@ This is a known issue related to Home Assistant's behavior on certain platforms 
 
 This integration follows Home Assistant's integration development guidelines:
 
-- Python 3.11+
+- Python 3.13+ (Home Assistant 2025.3 or newer)
 - Async/await patterns
 - Type hints throughout
 - Follows integration quality scale
 
+### Running Tests Locally
+
+The test suite uses [pytest-homeassistant-custom-component](https://github.com/MatthewFlamm/pytest-homeassistant-custom-component) and mocks all pCloud HTTP calls, so no pCloud account or credentials are needed.
+
+```bash
+# Create and activate a virtual environment (required on Debian/PEP 668 systems)
+python3.13 -m venv .venv
+source .venv/bin/activate
+
+# Install the pinned test and lint dependencies
+pip install -r requirements_test.txt
+
+# Lint and format checks
+ruff check .
+ruff format --check .   # use `ruff format .` to apply formatting
+
+# Run the tests
+pytest
+```
+
+The same checks run in CI (`.github/workflows/tests.yml`) on every push and pull request. Tests live in `tests/`, with sample pCloud API responses in `tests/fixtures/`.
+
 ### Versioning
 
-This project uses [Semantic Versioning](https://semver.org/) with manual release workflow:
+This project uses [Semantic Versioning](https://semver.org/):
 
 - **PATCH** (0.0.1): Bug fixes (`fix:`)
 - **MINOR** (0.1.0): New features (`feat:`)
 - **MAJOR** (1.0.0): Breaking changes (`feat!:` or `BREAKING CHANGE:`)
 
-Releases are created manually via GitHub Actions workflow dispatch with automatic changelog generation since the last version. See [CONTRIBUTING.md](CONTRIBUTING.md) for commit message guidelines.
+Releases are triggered by bumping `version` in `custom_components/pcloud_backup/manifest.json`. On every push to `main` (or a manual run), the release workflow compares that version with the latest `v*` tag and, if it is higher, creates the tag and a **draft** GitHub release (notes from the commits since the last release, plus the HACS zip) for a maintainer to review and publish. See [CONTRIBUTING.md](CONTRIBUTING.md) for commit message guidelines.
 
 ## Contributing
 
@@ -264,6 +294,3 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 [hacsdownloads-shield]: https://shields.ghotso.dev/github/downloads/ghotso/HAS-pCloud-Backup/latest/pcloud_backup.zip?displayAssetName=false&style=for-the-badge
 [hacsdownloads]: https://github.com/ghotso/HAS-pCloud-Backup/releases/latest
 [totaldownloads-shield]: https://shields.ghotso.dev/github/downloads/ghotso/HAS-pCloud-Backup/total?style=for-the-badge&label=Downloads%20Total
-
-
-last updated: 13.11.2025

@@ -1,14 +1,13 @@
 """Backup agent implementation for pCloud."""
+
 from __future__ import annotations
 
+from collections.abc import AsyncIterator, Callable, Collection, Coroutine
 import json
 import logging
-import os
-import tempfile
-from collections.abc import AsyncIterator, Callable, Coroutine
 from pathlib import Path
-from urllib.parse import unquote
 from typing import Any
+from urllib.parse import unquote
 
 from homeassistant.components.backup import (
     AgentBackup,
@@ -19,14 +18,13 @@ from homeassistant.components.backup import (
 )
 from homeassistant.core import HomeAssistant, callback
 
-from .api import PCloudAPI, PCloudAPIError
+from .api import PCloudAPI, PCloudAPIError, PCloudAuthError
 from .const import (
     CONF_BACKUP_FOLDER,
-    CONF_PERMANENT_DELETE,
     CONF_UPLOAD_TIMEOUT_SECONDS,
     DATA_BACKUP_AGENT_LISTENERS,
+    DATA_METADATA_CACHE,
     DEFAULT_BACKUP_FOLDER,
-    DEFAULT_PERMANENT_DELETE,
     DEFAULT_UPLOAD_TIMEOUT_SECONDS,
     DOMAIN,
 )
@@ -77,10 +75,58 @@ def async_register_backup_agents_listener(
     return remove_listener
 
 
+class BackupMetadataCache:
+    """Parsed .metadata.json payloads keyed by pCloud file id and content hash.
+
+    Metadata files are written once and never modified, so a listfolder entry
+    with an unchanged (fileid, hash) does not need to be downloaded again.
+    """
+
+    def __init__(self) -> None:
+        """Initialize an empty cache."""
+        self._entries: dict[Any, tuple[Any, dict[str, Any]]] = {}
+
+    def __len__(self) -> int:
+        """Return the number of cached payloads."""
+        return len(self._entries)
+
+    def get(self, file_id: Any, content_hash: Any) -> dict[str, Any] | None:
+        """Return the cached payload, or None if missing or the hash changed."""
+        cached = self._entries.get(file_id)
+        if cached is None or cached[0] != content_hash:
+            return None
+        return cached[1]
+
+    def set(self, file_id: Any, content_hash: Any, payload: dict[str, Any]) -> None:
+        """Store a parsed payload."""
+        self._entries[file_id] = (content_hash, payload)
+
+    def prune(self, file_ids: Collection[Any]) -> None:
+        """Drop entries whose file id is not in file_ids (keeps the cache bounded)."""
+        for file_id in self._entries.keys() - set(file_ids):
+            del self._entries[file_id]
+
+    def clear(self) -> None:
+        """Drop all entries."""
+        self._entries.clear()
+
+
 class PCloudBackupError(BackupAgentError):
     """Base exception for pCloud backup errors."""
 
     pass
+
+
+class PCloudBackupAuthError(PCloudBackupError):
+    """pCloud rejected the stored credentials; the entry needs reauthentication."""
+
+    def __init__(self) -> None:
+        """Initialize with a message telling the user how to fix it."""
+        super().__init__(
+            "pCloud authentication failed (access token revoked or invalid). "
+            "Re-authenticate the pCloud Backup integration in Settings > "
+            "Devices & services."
+        )
 
 
 class PCloudBackupAgent(BackupAgent):
@@ -166,9 +212,19 @@ class PCloudBackupAgent(BackupAgent):
         file_id = metadata_item.get("fileid")
         if file_id is None:
             return None
+        content_hash = metadata_item.get("hash")
+        cache = self._metadata_cache if content_hash is not None else None
         try:
-            metadata_bytes = await self.api.async_download_file(file_id)
-            payload = json.loads(metadata_bytes.decode("utf-8"))
+            cached = cache.get(file_id, content_hash) if cache is not None else None
+            if cached is None:
+                metadata_bytes = await self.api.async_download_file(file_id)
+                cached = json.loads(metadata_bytes.decode("utf-8"))
+                # Only successfully parsed payloads are cached; failed loads are
+                # retried on the next listing.
+                if cache is not None and isinstance(cached, dict):
+                    cache.set(file_id, content_hash, cached)
+            # Work on a copy: the cached payload must stay untouched.
+            payload = dict(cached)
             metadata_version = payload.pop("metadata_version", None)
             if metadata_version not in SUPPORTED_METADATA_VERSIONS:
                 _LOGGER.debug(
@@ -186,7 +242,7 @@ class PCloudBackupAgent(BackupAgent):
             if "extra_metadata" not in backup_dict:
                 backup_dict = {**backup_dict, "extra_metadata": {}}
             extra_metadata = dict(backup_dict["extra_metadata"])
-            
+
             # Keep the original backup_id from metadata (it should already be correct)
             # If the metadata has our slug-based format, try to restore from extra_metadata
             current_backup_id = backup_dict.get("backup_id", "")
@@ -215,9 +271,7 @@ class PCloudBackupAgent(BackupAgent):
             )
             return None
 
-    def _create_backup_from_file(
-        self, file_item: dict[str, Any], metadata_key: str
-    ) -> AgentBackup:
+    def _create_backup_from_file(self, file_item: dict[str, Any], metadata_key: str) -> AgentBackup:
         """Create AgentBackup object from file information as a fallback."""
         backup_dict = self.api.parse_backup_info(file_item)
         fallback_name = self._decode_display_name(backup_dict.get("name", metadata_key))
@@ -267,6 +321,8 @@ class PCloudBackupAgent(BackupAgent):
     ]:
         """Collect backups and return lookup maps."""
         backup_files, metadata_files = await self._async_get_folder_items(folder_id)
+        if (cache := self._metadata_cache) is not None:
+            cache.prune({item.get("fileid") for item in metadata_files.values()})
         backups_by_key: dict[str, AgentBackup] = {}
         backup_id_index: dict[str, str] = {}
 
@@ -287,10 +343,10 @@ class PCloudBackupAgent(BackupAgent):
     @property
     def available(self) -> bool:
         """Return if the backup agent is available.
-        
+
         This property must return True for the agent to be usable.
         Must be synchronous - no async calls allowed.
-        
+
         The agent is considered available if the integration domain exists
         in hass.data, meaning the integration has been loaded. The API
         will be lazy-loaded when needed via the api property.
@@ -299,15 +355,17 @@ class PCloudBackupAgent(BackupAgent):
             # Fast path: If API is cached, we're definitely available
             if self._api is not None:
                 return True
-            
+
             # Check if domain exists in hass.data (integration is loaded)
             # If domain exists, the integration is set up and agent should be available
             domain_data = self.hass.data.get(DOMAIN)
             if domain_data is None:
                 # Domain not loaded yet
-                _LOGGER.debug("Backup agent %s not available - domain not loaded", self.config_entry_id)
+                _LOGGER.debug(
+                    "Backup agent %s not available - domain not loaded", self.config_entry_id
+                )
                 return False
-            
+
             # Domain exists - integration is loaded, so agent is available
             # API will be loaded lazily when needed
             return True
@@ -327,9 +385,22 @@ class PCloudBackupAgent(BackupAgent):
             self._api = api
         return self._api
 
+    def _auth_failed(self, err: PCloudAuthError) -> PCloudBackupAuthError:
+        """Start the reauth flow for the entry and return the error to raise."""
+        _LOGGER.error("pCloud rejected the access token: %s", err)
+        if entry := self.hass.config_entries.async_get_entry(self.config_entry_id):
+            # Home Assistant ignores this if a reauth flow is already in progress.
+            entry.async_start_reauth(self.hass)
+        return PCloudBackupAuthError()
+
+    @property
+    def _metadata_cache(self) -> BackupMetadataCache | None:
+        """Return the metadata cache of the config entry (None if not set up)."""
+        return self.hass.data.get(DATA_METADATA_CACHE, {}).get(self.config_entry_id)
+
     def _extract_backup_filename(self, backup_name_or_id: str) -> str:
         """Extract the actual filename from backup_id or backup_name.
-        
+
         If backup_name_or_id is in format 'slug:filename', extract filename.
         Otherwise return as-is.
         """
@@ -355,9 +426,7 @@ class PCloudBackupAgent(BackupAgent):
             backup_folder = options.get(CONF_BACKUP_FOLDER, DEFAULT_BACKUP_FOLDER)
 
             folder_id = await self.api.async_get_folder_id(backup_folder)
-            backups_by_key, backup_id_index, _, _ = await self._async_collect_backups(
-                folder_id
-            )
+            backups_by_key, backup_id_index, _, _ = await self._async_collect_backups(folder_id)
 
             # Try lookup by backup_id first
             if backup_name in backup_id_index:
@@ -377,6 +446,8 @@ class PCloudBackupAgent(BackupAgent):
 
         except BackupNotFound:
             raise
+        except PCloudAuthError as err:
+            raise self._auth_failed(err) from err
         except PCloudAPIError as err:
             _LOGGER.error("Failed to get backup: %s", err, exc_info=True)
             raise PCloudBackupError(f"Failed to get backup: {err}") from err
@@ -385,7 +456,11 @@ class PCloudBackupAgent(BackupAgent):
             raise PCloudBackupError(f"Unexpected error getting backup: {err}") from err
 
     async def async_list_backups(self, **kwargs: Any) -> list[AgentBackup]:
-        """List all backups in pCloud."""
+        """List all backups in pCloud.
+
+        API errors are logged and yield an empty list, except authentication
+        errors, which start the reauth flow and raise PCloudBackupAuthError.
+        """
         try:
             config_entry = self.hass.config_entries.async_get_entry(self.config_entry_id)
             if config_entry is None:
@@ -406,10 +481,12 @@ class PCloudBackupAgent(BackupAgent):
             _LOGGER.info("Returning %d backups from pCloud", len(backups))
             return backups
 
+        except PCloudAuthError as err:
+            raise self._auth_failed(err) from err
         except PCloudAPIError as err:
             _LOGGER.error("Failed to list backups: %s", err, exc_info=True)
             return []
-        except Exception as err:
+        except Exception:
             _LOGGER.exception("Unexpected error listing backups")
             return []
 
@@ -421,7 +498,7 @@ class PCloudBackupAgent(BackupAgent):
         **kwargs: Any,
     ) -> None:
         """Upload a backup to pCloud.
-        
+
         Args:
             open_stream: A function returning an async iterator that yields bytes.
             backup: Metadata about the backup that should be uploaded.
@@ -461,10 +538,10 @@ class PCloudBackupAgent(BackupAgent):
             # Stream backup directly from Home Assistant to pCloud
             # Uses dual-path strategy: FIFO if size known, temp file in /backup if unknown
             _LOGGER.info("Starting upload of backup %s to pCloud", backup_name)
-            
+
             stream = await open_stream()
             backup_metadata_size = getattr(backup, "size", 0) or 0
-            
+
             if backup_metadata_size > 0:
                 _LOGGER.info(
                     "Backup metadata reports size: %d bytes (%.2f MB) - will use FIFO path",
@@ -472,10 +549,8 @@ class PCloudBackupAgent(BackupAgent):
                     backup_metadata_size / (1024 * 1024),
                 )
             else:
-                _LOGGER.info(
-                    "Backup size unknown - will use temp file in /backup directory"
-                )
-            
+                _LOGGER.info("Backup size unknown - will use temp file in /backup directory")
+
             # Stream directly from backup iterator to pCloud
             # Pass file_size to enable FIFO path when size is known
             upload_timeout_s = int(
@@ -494,14 +569,14 @@ class PCloudBackupAgent(BackupAgent):
             # Do NOT change backup_id - HA uses it to find decryption keys
             backup_dict = backup.as_dict()
             original_backup_id = backup_dict.get("backup_id")
-            
+
             # Store slug-based ID in extra_metadata for lookup purposes
             # but keep the original backup_id unchanged
             extra_metadata = dict(backup_dict.get("extra_metadata", {}))
             extra_metadata["slug_backup_id"] = f"{self.slug}:{metadata_key}"
             if original_backup_id and extra_metadata.get("original_backup_id") is None:
                 extra_metadata["original_backup_id"] = original_backup_id
-            
+
             # Keep the original backup_id unchanged (needed for HA decryption key matching)
             # Do NOT overwrite it with slug-based format
             backup_dict["extra_metadata"] = extra_metadata
@@ -510,18 +585,12 @@ class PCloudBackupAgent(BackupAgent):
                 ensure_ascii=False,
             ).encode("utf-8")
             try:
-                await self.api.async_upload_file(
-                    folder_id, metadata_filename, metadata_payload
-                )
+                await self.api.async_upload_file(folder_id, metadata_filename, metadata_payload)
             except Exception as err:
-                _LOGGER.error(
-                    "Failed to upload metadata for backup %s: %s", backup_name, err
-                )
+                _LOGGER.error("Failed to upload metadata for backup %s: %s", backup_name, err)
                 # Attempt to remove the backup file so we don't leave a partial upload
                 try:
-                    latest_backup_files, _ = await self._async_get_folder_items(
-                        folder_id
-                    )
+                    latest_backup_files, _ = await self._async_get_folder_items(folder_id)
                     backup_file = latest_backup_files.get(metadata_key)
                     if backup_file and backup_file.get("fileid"):
                         await self.api.async_delete_file(backup_file["fileid"])
@@ -535,6 +604,8 @@ class PCloudBackupAgent(BackupAgent):
 
             _LOGGER.info("Successfully uploaded backup %s", backup_name)
 
+        except PCloudAuthError as err:
+            raise self._auth_failed(err) from err
         except PCloudAPIError as err:
             _LOGGER.error("Failed to upload backup: %s", err, exc_info=True)
             raise PCloudBackupError(f"Failed to upload backup: {err}") from err
@@ -542,23 +613,21 @@ class PCloudBackupAgent(BackupAgent):
             _LOGGER.exception("Unexpected error uploading backup")
             raise PCloudBackupError(f"Unexpected error uploading backup: {err}") from err
 
-    async def async_download_backup(
-        self, backup_id: str, **kwargs: Any
-    ) -> AsyncIterator[bytes]:
+    async def async_download_backup(self, backup_id: str, **kwargs: Any) -> AsyncIterator[bytes]:
         """Download a backup from pCloud and return as an async stream.
-        
+
         This method is called by Home Assistant to download backups for decryption
         checks and actual downloads. It returns an async iterator that yields
         chunks of the backup file.
-        
+
         This implementation streams directly from pCloud to Home Assistant,
         similar to how the OneDrive integration works. No temp files are used.
-        
+
         Args:
             backup_id: The backup ID (can be backup_id or backup name)
             **kwargs: Additional keyword arguments that Home Assistant may pass,
                      such as 'progress' callback or 'expected_size'
-            
+
         Returns:
             AsyncIterator[bytes]: An async iterator that yields chunks of backup file data
         """
@@ -571,7 +640,7 @@ class PCloudBackupAgent(BackupAgent):
             )
         else:
             _LOGGER.info("Starting download of backup %s", backup_id)
-        
+
         try:
             config_entry = self.hass.config_entries.async_get_entry(self.config_entry_id)
             if config_entry is None:
@@ -619,6 +688,8 @@ class PCloudBackupAgent(BackupAgent):
         except BackupNotFound:
             # Re-raise BackupNotFound as-is (it's already a BackupAgentError subclass)
             raise
+        except PCloudAuthError as err:
+            raise self._auth_failed(err) from err
         except PCloudAPIError as err:
             _LOGGER.error(
                 "pCloud API error downloading backup %s: %s",
@@ -670,80 +741,26 @@ class PCloudBackupAgent(BackupAgent):
             if file_id is None:
                 raise BackupNotFound(f"Backup {backup_name} has no file ID")
 
-            permanent_delete = options.get(
-                CONF_PERMANENT_DELETE, DEFAULT_PERMANENT_DELETE
-            )
-
             _LOGGER.info("Deleting backup %s from pCloud", backup_name)
             await self.api.async_delete_file(file_id)
-            purge_failed = False
-            if permanent_delete:
-                purge_failed |= not await self._async_trash_clear(
-                    file_id, backup_name, "backup"
-                )
-            # Also remove metadata file if present. _async_trash_clear never
-            # raises, so this try/except only guards async_delete_file.
+            # Also remove metadata file if present
             metadata_item = metadata_files.get(metadata_key)
             if metadata_item and metadata_item.get("fileid"):
                 try:
                     await self.api.async_delete_file(metadata_item["fileid"])
-                    if permanent_delete:
-                        purge_failed |= not await self._async_trash_clear(
-                            metadata_item["fileid"], backup_name, "metadata"
-                        )
                 except Exception as err:  # noqa: BLE001
-                    _LOGGER.warning(
-                        "Failed to delete metadata for backup %s: %s", backup_name, err
-                    )
+                    _LOGGER.warning("Failed to delete metadata for backup %s: %s", backup_name, err)
 
-            if permanent_delete and purge_failed:
-                _LOGGER.warning(
-                    "Deleted backup %s, but permanently purging one or more "
-                    "related files from pCloud Trash failed — they may still "
-                    "be recoverable until Trash is emptied",
-                    backup_name,
-                )
-            else:
-                _LOGGER.info("Successfully deleted backup %s", backup_name)
+            _LOGGER.info("Successfully deleted backup %s", backup_name)
 
         except BackupNotFound:
             # Re-raise BackupNotFound as-is (it's already a BackupAgentError subclass)
             raise
+        except PCloudAuthError as err:
+            raise self._auth_failed(err) from err
         except PCloudAPIError as err:
             _LOGGER.error("Failed to delete backup: %s", err, exc_info=True)
             raise PCloudBackupError(f"Failed to delete backup: {err}") from err
         except Exception as err:
             _LOGGER.exception("Unexpected error deleting backup")
             raise PCloudBackupError(f"Unexpected error deleting backup: {err}") from err
-
-    async def _async_trash_clear(
-        self, file_id: int, backup_name: str, file_kind: str
-    ) -> bool:
-        """Permanently purge a deleted file from Trash.
-
-        Best-effort: failures are logged but don't fail the overall delete,
-        since deletefile already succeeded and the backup is no longer
-        listed - it would just remain in Trash until manually emptied.
-        Returns True if the file was purged, False otherwise.
-        """
-        if not isinstance(file_id, int) or file_id <= 0:
-            _LOGGER.warning(
-                "Skipping Trash purge of %s for backup %s: invalid file ID %r",
-                file_kind,
-                backup_name,
-                file_id,
-            )
-            return False
-        try:
-            await self.api.async_trash_clear(file_id)
-        except Exception as err:  # noqa: BLE001
-            _LOGGER.warning(
-                "Failed to purge %s for backup %s from Trash: %s",
-                file_kind,
-                backup_name,
-                err,
-            )
-            return False
-        return True
-
-

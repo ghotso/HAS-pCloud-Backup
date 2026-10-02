@@ -100,10 +100,9 @@ custom_components/pcloud_backup/
 
 * Endpoint: `POST /deletefile`
 * Throws `BackupNotFound` (as per HA API) if missing.
-* Optional `permanent_delete` setting: when enabled, also calls `POST /trash_clear`
-  on the same file id(s) after `deletefile`, permanently purging the backup
-  from pCloud Trash and freeing quota immediately. Default `false` (deleted
-  backups remain recoverable in Trash, matching prior behavior).
+* Deleted files go to the pCloud Trash. Purging them (`trash_clear`) is not
+  possible: pCloud's Trash methods reject OAuth tokens ("Log in required"),
+  see #29.
 
 ---
 

@@ -1,24 +1,21 @@
-# This workflow uses actions that are not certified by GitHub.
-# They are provided by a third-party and are governed by
-# separate terms of service, privacy policy, and support
-# documentation.
-
-# Bandit is a security linter designed to find common security issues in Python code.
-# This action will run Bandit on your codebase.
-# The results of the scan will be found under the Security tab of your repository.
-
+# Bandit is a security linter for Python. Results are uploaded as SARIF and appear
+# under the repository's Security tab (code scanning). It does not fail the build.
+#
 # https://github.com/marketplace/actions/bandit-scan is ISC licensed, by abirismyname
 # https://pypi.org/project/bandit/ is Apache v2.0 licensed, by PyCQA
 
 name: Bandit
 on:
   push:
-    branches: [ "main" ]
+    branches: [main, dev]
+  # Scan every pull request, regardless of its target branch.
   pull_request:
-    # The branches below must be a subset of the branches above
-    branches: [ "main" ]
   schedule:
-    - cron: '37 7 * * 1'
+    - cron: "37 7 * * 1"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   bandit:
@@ -28,25 +25,17 @@ jobs:
       actions: read # only required for a private repository by github/codeql-action/upload-sarif to get the Action run status
 
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false # nothing after checkout needs the token
       - name: Bandit Scan
         uses: shundor/python-bandit-scan@ab1d87dfccc5a0ffab88be3aaac6ffe35c10d6cd
-        with: # optional arguments
-          # exit with 0, even with results found
-          exit_zero: true # optional, default is DEFAULT
-          # Github token of the repository (automatically created by Github)
-          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }} # Needed to get PR information.
-          # File or directory to run bandit on
-          # path: # optional, default is .
-          # Report only issues of a given severity level or higher. Can be LOW, MEDIUM or HIGH. Default is UNDEFINED (everything)
-          # level: # optional, default is UNDEFINED
-          # Report only issues of a given confidence level or higher. Can be LOW, MEDIUM or HIGH. Default is UNDEFINED (everything)
-          # confidence: # optional, default is UNDEFINED
-          # comma-separated list of paths (glob patterns supported) to exclude from scan (note that these are in addition to the excluded paths provided in the config file) (default: .svn,CVS,.bzr,.hg,.git,__pycache__,.tox,.eggs,*.egg)
-          # excluded_paths: # optional, default is DEFAULT
-          # comma-separated list of test IDs to skip
-          # skips: # optional, default is DEFAULT
-          # path to a .bandit file that supplies command line arguments
-          # ini_path: # optional, default is DEFAULT
-
+        with:
+          # Report findings in the Security tab instead of failing the build.
+          exit_zero: true
+          # The built-in token is enough to read PR information; no PAT needed.
+          GITHUB_TOKEN: ${{ github.token }}
+          # Scan only the integration; tests use `assert` by design (B101).
+          path: custom_components

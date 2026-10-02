@@ -1,0 +1,97 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: en-US
+tone_instructions: "Be concise and constructive; many PRs come from first-time contributors."
+
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  in_progress_fortune: false
+  sequence_diagrams: false
+  # Enforced by Conventional Commits / semantic-release on main.
+  auto_title_instructions: "Use Conventional Commits format: type(scope): summary, e.g. fix(backup): ..."
+
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - main
+      - dev
+    ignore_usernames:
+      - github-actions[bot]
+
+  path_filters:
+    - "!docs/screenshots/**"
+    - "!**/*.gif"
+    - "!**/*.png"
+    - "!CHANGELOG.md"
+
+  path_instructions:
+    - path: "custom_components/pcloud_backup/**/*.py"
+      instructions: |
+        This is a Home Assistant custom integration (HACS) that stores HA backups in pCloud.
+        - Code runs in HA's event loop: flag any blocking I/O (sync file/network calls, time.sleep,
+          requests) — it must be async or run via hass.async_add_executor_job.
+        - Never log tokens, passwords, auth digests or full API responses that may contain them.
+        - pCloud API errors must be raised as PCloudAPIError and surfaced to HA as BackupAgentError
+          subclasses (e.g. BackupNotFound, PCloudBackupError), not as bare exceptions.
+        - New user-facing options must default to existing behaviour and be read via
+          config_entry.options with a DEFAULT_* fallback from const.py.
+        - Minimum supported Home Assistant version is set in hacs.json; flag use of HA APIs newer than it.
+    - path: "custom_components/pcloud_backup/backup.py"
+      instructions: |
+        Implements HA's BackupAgent contract. Check that:
+        - async_get_backup raises BackupNotFound instead of returning None.
+        - Backup agent listeners are notified via config entry state changes, and
+          async_get_backup_agents only returns agents for LOADED entries.
+        - Every backup .tar has a matching .metadata.json; deletes and uploads keep both in sync.
+        - Destructive pCloud calls (deletefile) only ever target the intended file id.
+        - Do not add pCloud Trash methods (trash_clear etc.): they reject OAuth tokens (see #29).
+    - path: "custom_components/pcloud_backup/api.py"
+      instructions: |
+        Wraps the pCloud HTTP API (EU and US regions). Check region-correct base URLs, that
+        _request handles non-zero `result` codes and auth-error retry/refresh correctly, and that
+        large uploads keep memory bounded (streaming, no full-file reads into memory).
+    - path: "custom_components/pcloud_backup/{strings.json,translations/*.json}"
+      instructions: |
+        strings.json, translations/en.json and translations/de.json must have identical key sets.
+        en.json mirrors strings.json. German copy should be natural, informal (du-form) and consistent
+        with existing wording. config.step.folder_path and options.step.init are intentionally duplicated
+        and must stay in sync.
+    - path: "custom_components/pcloud_backup/manifest.json"
+      instructions: |
+        Must pass hassfest: no packages that ship with Home Assistant core (e.g. aiohttp) in
+        `requirements`. `version` is SemVer and managed by the release workflow.
+    - path: ".github/workflows/**"
+      instructions: |
+        Keep least-privilege `permissions`. hassfest and hacs are required status checks on main;
+        do not rename those jobs.
+    - path: "tests/**"
+      instructions: |
+        Tests use pytest-homeassistant-custom-component with mocked pCloud HTTP; no real pCloud
+        credentials or network access.
+
+  tools:
+    ruff:
+      enabled: true
+    actionlint:
+      enabled: true
+    yamllint:
+      enabled: true
+    markdownlint:
+      enabled: true
+    gitleaks:
+      enabled: true
+    languagetool:
+      enabled: true
+
+chat:
+  auto_reply: true
+
+knowledge_base:
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - CONTRIBUTING.md
+      - PRD/PRD.md

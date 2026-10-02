@@ -1,0 +1,21 @@
+{
+  "metadata_version": 2,
+  "backup": {
+    "addons": [],
+    "backup_id": "a1b2c3d4",
+    "date": "2025-01-02T03:00:00+00:00",
+    "database_included": true,
+    "extra_metadata": {
+      "instance_id": "abc",
+      "with_automatic_settings": true,
+      "slug_backup_id": "pcloud_backup.entry1:Automatic_backup_2025.1.0_2025-01-02_03.00_00000000",
+      "original_backup_id": "a1b2c3d4"
+    },
+    "folders": [],
+    "homeassistant_included": true,
+    "homeassistant_version": "2025.1.0",
+    "name": "Automatic backup 2025.1.0",
+    "protected": true,
+    "size": 1000
+  }
+}

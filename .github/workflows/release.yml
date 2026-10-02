@@ -19,6 +19,7 @@ on:
 
 permissions:
   contents: write
+  checks: read # wait for required checks before tagging
 
 concurrency:
   group: release-automation
@@ -28,9 +29,10 @@ jobs:
   release:
     name: Version check, tag, release, and zip
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           token: ${{ secrets.GH_TOKEN || github.token }}
@@ -325,6 +327,38 @@ jobs:
 
           print(f"Will release {new_tag} (manifest {manifest_version} > {latest_tag or 'no prior tag'})")
           PY
+
+      # Safety net for admin-bypass merges/pushes: never tag a commit whose required
+      # checks (same as the main ruleset) did not pass. Waits for runs still in progress.
+      - name: Wait for required checks on this commit
+        if: steps.plan.outputs.should_release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUIRED_CHECKS: "hacs hassfest Ruff Pytest"
+        run: |
+          set -euo pipefail
+          deadline=$(( $(date +%s) + 45 * 60 ))
+          while :; do
+            pending=""; failed=""
+            for check in $REQUIRED_CHECKS; do
+              # Latest run of this check for the commit being released.
+              read -r status conclusion < <(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?check_name=${check}" \
+                --jq '.check_runs | sort_by(.started_at) | last | "\(.status // "missing") \(.conclusion // "none")"')
+              echo "${check}: ${status} / ${conclusion}"
+              if [ "$status" != "completed" ]; then pending="$pending $check"
+              elif [ "$conclusion" != "success" ]; then failed="$failed $check"; fi
+            done
+            if [ -n "$failed" ]; then
+              echo "::error::Required checks failed on ${GITHUB_SHA}:${failed} - not releasing."
+              exit 1
+            fi
+            [ -z "$pending" ] && { echo "All required checks passed."; break; }
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::Timed out waiting for required checks:${pending}"
+              exit 1
+            fi
+            echo "Waiting for:${pending}"; sleep 30
+          done
 
       - name: Build pcloud_backup.zip
         if: steps.plan.outputs.should_release == 'true'
