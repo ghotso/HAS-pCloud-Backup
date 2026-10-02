@@ -7,7 +7,7 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry, OptionsFlow
 from homeassistant.core import callback
-from homeassistant.data_entry_flow import FlowResult
+from homeassistant.data_entry_flow import AbortFlow, FlowResult
 from homeassistant.helpers import config_entry_oauth2_flow
 import voluptuous as vol
 
@@ -474,6 +474,10 @@ class PCloudConfigFlow(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domai
                             CONF_PERMANENT_DELETE: permanent_delete,
                         },
                     )
+            except AbortFlow:
+                # Let flow aborts (e.g. already_configured) propagate instead of
+                # being reported as an unknown error below.
+                raise
             except PCloudAPIError as err:
                 _LOGGER.error("Connection test failed: %s", err)
                 errors["base"] = "cannot_connect"

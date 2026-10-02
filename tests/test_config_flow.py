@@ -226,14 +226,6 @@ async def test_folder_path_connection_errors(
     assert result["errors"] == {"base": expected}
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "bug: AbortFlow from _abort_if_unique_id_configured() is swallowed by the "
-        "broad `except Exception` in async_step_folder_path, so the user sees the "
-        "'unknown' error instead of an already_configured abort"
-    ),
-)
 async def test_folder_path_already_configured(
     hass: HomeAssistant, config_entry: MockConfigEntry, mock_flow_api: MagicMock
 ) -> None:
