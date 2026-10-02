@@ -73,8 +73,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN][entry.entry_id] = api
     entry.runtime_data = api
 
-    # Notify backup manager listeners that agents may have changed
-    _notify_backup_agent_listeners(hass)
+    # Notify backup manager listeners on every state change. Notifying only
+    # during setup is too early: the entry is still SETUP_IN_PROGRESS, so
+    # async_get_backup_agents (which uses async_loaded_entries) would skip it
+    # and the agent would disappear after a reload (e.g. options change).
+    entry.async_on_unload(
+        entry.async_on_state_change(
+            lambda: _notify_backup_agent_listeners(hass)
+        )
+    )
 
     # Register update listener
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
@@ -94,7 +101,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if api:
             await api.async_close()
         entry.runtime_data = None
-        _notify_backup_agent_listeners(hass)
 
     return unload_ok
 

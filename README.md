@@ -143,7 +143,7 @@ All backups (both local and pCloud) are displayed in **Settings** → **System**
 
 ## Requirements
 
-- Home Assistant 2025.1 or later
+- Home Assistant 2025.3 or later
 - pCloud account (works with 2FA-enabled accounts)
 - Active internet connection for backup synchronization
 
