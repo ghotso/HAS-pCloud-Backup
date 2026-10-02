@@ -126,6 +126,18 @@ class PCloudAuthError(PCloudAPIError):
 AUTH_ERROR_CODES = frozenset({1000, 2000, 2094})
 
 
+def _result_error(result: dict[str, Any]) -> PCloudAPIError:
+    """Return the exception for a pCloud response whose ``result`` is not 0.
+
+    Auth error codes become PCloudAuthError (pCloud has no refresh tokens, so
+    the entry needs reauthentication); everything else is a PCloudAPIError.
+    """
+    error_msg = result.get("error", "Unknown error")
+    if result.get("result") in AUTH_ERROR_CODES:
+        return PCloudAuthError(f"pCloud authentication failed: {error_msg}")
+    return PCloudAPIError(f"pCloud API error: {error_msg}")
+
+
 class PCloudAPI:
     """Async wrapper for pCloud REST API."""
 
@@ -242,13 +254,7 @@ class PCloudAPI:
 
         # Check for pCloud API errors
         if isinstance(result, dict) and result.get("result") != 0:
-            error_code = result.get("result")
-            error_msg = result.get("error", "Unknown error")
-
-            if error_code in AUTH_ERROR_CODES:
-                # pCloud has no refresh tokens; the entry needs reauthentication.
-                raise PCloudAuthError(f"pCloud authentication failed: {error_msg}")
-            raise PCloudAPIError(f"pCloud API error: {error_msg}")
+            raise _result_error(result)
 
         return result
 
@@ -358,11 +364,7 @@ class PCloudAPI:
 
         # Check for pCloud API errors (never retried)
         if isinstance(result, dict) and result.get("result") != 0:
-            error_code = result.get("result")
-            error_msg = result.get("error", "Unknown error")
-            if error_code in AUTH_ERROR_CODES:
-                raise PCloudAuthError(f"pCloud authentication failed: {error_msg}")
-            raise PCloudAPIError(f"pCloud API error: {error_msg}")
+            raise _result_error(result)
 
         return result
 
@@ -419,6 +421,9 @@ class PCloudAPI:
                     file_size,
                     upload_client_timeout,
                 )
+            except PCloudAuthError:
+                # Rejected credentials must reach the caller unchanged (reauth).
+                raise
             except PCloudAPIError as fifo_err:
                 # Check if it's a connection reset (pCloud rejecting chunked encoding)
                 if "Connection reset" in str(fifo_err) or "[Errno 104]" in str(fifo_err):
@@ -771,7 +776,7 @@ class PCloudAPI:
                             error_code,
                             error_msg,
                         )
-                        raise PCloudAPIError(f"pCloud API error: {error_msg}")
+                        raise _result_error(result)
 
                     _LOGGER.info(
                         "Successfully uploaded %s via FIFO (%d MB, %d chunks)",
@@ -802,6 +807,9 @@ class PCloudAPI:
                 except Exception as close_err:
                     _LOGGER.warning("Error closing FIFO reader: %s", close_err)
 
+        except PCloudAuthError:
+            # Rejected credentials must reach the caller unchanged (reauth).
+            raise
         except Exception as err:
             # Log detailed diagnostics for FIFO failures
             _LOGGER.error(
@@ -967,6 +975,9 @@ class PCloudAPI:
             )
             return result
 
+        except PCloudAuthError:
+            # Rejected credentials must reach the caller unchanged (reauth).
+            raise
         except Exception as err:
             _LOGGER.exception("Error uploading %s via temp file", filename)
             raise PCloudAPIError(f"Error uploading {filename}: {err}") from err
@@ -1073,7 +1084,7 @@ class PCloudAPI:
                                 error_code,
                                 error_msg,
                             )
-                            raise PCloudAPIError(f"pCloud API error: {error_msg}")
+                            raise _result_error(result)
 
                         _LOGGER.info("Successfully uploaded %s to pCloud", filename)
                         return result
@@ -1085,6 +1096,9 @@ class PCloudAPI:
                 except aiohttp.ClientError as err:
                     _LOGGER.error("Network error uploading %s: %s", filename, err, exc_info=True)
                     raise PCloudAPIError(f"Network error uploading {filename}: {err}") from err
+                except PCloudAuthError:
+                    # Rejected credentials must reach the caller unchanged (reauth).
+                    raise
                 except Exception as err:
                     _LOGGER.exception("Unexpected error uploading %s", filename)
                     raise PCloudAPIError(f"Unexpected error uploading {filename}: {err}") from err

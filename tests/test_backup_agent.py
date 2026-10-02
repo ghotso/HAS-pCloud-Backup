@@ -4,15 +4,19 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 import json
-from unittest.mock import call
+from pathlib import Path
+import tempfile
+from unittest.mock import AsyncMock, call
 
+from aioresponses import aioresponses
 from homeassistant.components.backup import AgentBackup, BackupAgentError, BackupNotFound
 from homeassistant.config_entries import SOURCE_REAUTH
 from homeassistant.core import HomeAssistant
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.pcloud_backup.api import PCloudAPIError, PCloudAuthError
+from custom_components.pcloud_backup.api import PCloudAPI, PCloudAPIError, PCloudAuthError
+from custom_components.pcloud_backup.auth import PCloudOAuth2Auth
 from custom_components.pcloud_backup.backup import (
     METADATA_VERSION,
     BackupMetadataCache,
@@ -27,10 +31,12 @@ from custom_components.pcloud_backup.const import (
 )
 
 from .common import (
+    ACCESS_TOKEN,
     AGENT_ID,
     BACKUP_FOLDER,
     BACKUP_FOLDER_ID,
     ENTRY_ID,
+    EU_BASE,
     ORPHAN_FILE_ID,
     ORPHAN_KEY,
     PAIRED_FILE_ID,
@@ -39,6 +45,7 @@ from .common import (
     listfolder_files,
     load_json_fixture,
     metadata_bytes,
+    request_calls,
 )
 
 ORPHAN_BACKUP_ID = f"{AGENT_ID}:{ORPHAN_KEY}"
@@ -582,3 +589,56 @@ async def test_non_auth_errors_do_not_start_reauth(
     await hass.async_block_till_done()
 
     assert _reauth_flows(hass) == []
+
+
+def _dir_entries(path: Path) -> list[Path]:
+    return list(path.iterdir())
+
+
+@pytest.mark.parametrize(
+    "size",
+    [pytest.param(1000, id="fifo"), pytest.param(0, id="tempfile")],
+)
+async def test_large_upload_auth_error_starts_reauth(
+    hass: HomeAssistant,
+    config_entry: MockConfigEntry,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    size: int,
+) -> None:
+    """An auth error from pCloud's response to the archive upload starts one reauth flow."""
+    config_entry.add_to_hass(hass)
+    api = PCloudAPI(hass, "eu", PCloudOAuth2Auth(hass, "eu", access_token=ACCESS_TOKEN))
+    agent = PCloudBackupAgent(hass, ENTRY_ID, api=api, name=config_entry.title)
+    monkeypatch.setattr(api, "async_get_folder_id", AsyncMock(return_value=BACKUP_FOLDER_ID))
+    monkeypatch.setattr(api, "async_list_folder", AsyncMock(return_value=[]))
+    # Keep the FIFO / temp file of the upload inside tmp_path.
+    original_mkstemp = tempfile.mkstemp
+    monkeypatch.setattr(
+        tempfile,
+        "mkstemp",
+        lambda suffix=None, prefix=None, dir=None, text=False: original_mkstemp(  # noqa: A006
+            suffix=suffix, prefix=prefix, dir=tmp_path, text=text
+        ),
+    )
+
+    for _ in range(2):
+        with (
+            aioresponses() as mocked,
+            pytest.raises(PCloudBackupAuthError, match="Re-authenticate"),
+        ):
+            mocked.post(
+                f"{EU_BASE}/uploadfile",
+                payload={"result": 1000, "error": "Log in required."},
+                repeat=True,
+            )
+            await agent.async_upload_backup(
+                open_stream=_open_stream, backup=_agent_backup(size=size)
+            )
+        await hass.async_block_till_done()
+        # Only the archive upload was attempted: no metadata upload, no retry.
+        assert len(request_calls(mocked, "POST", "/uploadfile")) == 1
+
+    (flow,) = _reauth_flows(hass)
+    assert flow["context"]["entry_id"] == ENTRY_ID
+    assert _dir_entries(tmp_path) == []
