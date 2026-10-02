@@ -1,0 +1,37 @@
+{
+  "result": 0,
+  "metadata": {
+    "folderid": 42,
+    "name": "Backups",
+    "isfolder": true,
+    "contents": [
+      {
+        "name": "Automatic_backup_2025.1.0_2025-01-02_03.00_00000000.tar",
+        "fileid": 101,
+        "size": 1048576,
+        "isfolder": false,
+        "modified": "Thu, 02 Jan 2025 03:05:00 +0000"
+      },
+      {
+        "name": "Automatic_backup_2025.1.0_2025-01-02_03.00_00000000.metadata.json",
+        "fileid": 102,
+        "size": 812,
+        "isfolder": false,
+        "modified": "Thu, 02 Jan 2025 03:05:01 +0000"
+      },
+      {
+        "name": "Manual_backup_2024-12-01.tar",
+        "fileid": 201,
+        "size": 524288,
+        "isfolder": false,
+        "modified": 1733022000
+      },
+      {
+        "name": "nested",
+        "folderid": 7,
+        "isfolder": true,
+        "modified": "Sun, 01 Dec 2024 00:00:00 +0000"
+      }
+    ]
+  }
+}

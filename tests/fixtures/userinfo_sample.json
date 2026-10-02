@@ -1,0 +1,10 @@
+{
+  "result": 0,
+  "userid": 123456,
+  "email": "user@example.com",
+  "emailverified": true,
+  "quota": 10737418240,
+  "usedquota": 2147483648,
+  "premium": false,
+  "language": "en"
+}
