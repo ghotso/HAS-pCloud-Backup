@@ -5,12 +5,11 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import voluptuous as vol
-
 from homeassistant.config_entries import ConfigEntry, OptionsFlow
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import config_entry_oauth2_flow
+import voluptuous as vol
 
 from .api import PCloudAPI, PCloudAPIError
 from .auth import create_auth
@@ -328,7 +327,6 @@ class PCloudOAuth2Implementation(config_entry_oauth2_flow.LocalOAuth2Implementat
                                     return token_dict
                                 else:
                                     last_error = result2.get("error", "Unknown error")
-                                    error_code2 = result2.get("result")
 
                             if success:
                                 break
@@ -467,8 +465,8 @@ class PCloudConfigFlow(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domai
                         data={
                             **data,
                             CONF_REGION: region,
-                            "hostname": getattr(self, "_oauth_hostname"),
-                            "locationid": getattr(self, "_oauth_locationid"),
+                            "hostname": self._oauth_hostname,
+                            "locationid": self._oauth_locationid,
                         },
                         options={
                             CONF_BACKUP_FOLDER: backup_folder,
@@ -479,7 +477,7 @@ class PCloudConfigFlow(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domai
             except PCloudAPIError as err:
                 _LOGGER.error("Connection test failed: %s", err)
                 errors["base"] = "cannot_connect"
-            except Exception as err:
+            except Exception:
                 _LOGGER.exception("Unexpected error during setup")
                 errors["base"] = "unknown"
 

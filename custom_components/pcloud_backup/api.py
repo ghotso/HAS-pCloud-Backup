@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import logging
-import os
 from collections.abc import AsyncIterator
 from datetime import datetime
 from email.utils import parsedate_to_datetime
+import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -294,7 +294,7 @@ class PCloudAPI:
                     raise PCloudAPIError(f"pCloud API error: {error_msg}")
 
                 return result
-        except asyncio.TimeoutError as err:
+        except TimeoutError as err:
             _LOGGER.error("Upload timeout for %s: %s", filename, err)
             raise PCloudAPIError(f"Upload timeout for {filename}") from err
         except aiohttp.ClientError as err:
@@ -330,8 +330,6 @@ class PCloudAPI:
         Returns:
             pCloud API response dict
         """
-        import tempfile
-        import os
 
         eff_upload_seconds = (
             upload_total_seconds
@@ -397,8 +395,8 @@ class PCloudAPI:
         - Sets Content-Length header for pCloud compatibility
         - Writer closes only after all data is written and flushed
         """
-        import tempfile
         import os
+        import tempfile
 
         fifo_path = None
         stream_writer_task = None
@@ -588,13 +586,13 @@ class PCloudAPI:
             try:
                 await asyncio.wait_for(writer_opened.wait(), timeout=30.0)
                 _LOGGER.debug("Reader: Writer confirmed ready, both ends connected")
-            except asyncio.TimeoutError:
+            except TimeoutError as err:
                 _LOGGER.error(
                     "Reader: Writer did not confirm readiness within 30 seconds. "
                     "This indicates a synchronization issue."
                 )
                 await asyncio.to_thread(fifo_file.close)
-                raise PCloudAPIError("FIFO writer failed to become ready in time")
+                raise PCloudAPIError("FIFO writer failed to become ready in time") from err
 
             # Use MultipartWriter instead of FormData
             # MultipartWriter allows us to specify content_length for the file part,
@@ -608,7 +606,7 @@ class PCloudAPI:
             writer.append(
                 str(folder_id), headers={"Content-Disposition": 'form-data; name="folderid"'}
             )
-            writer.append(filename, headers={"Content-Disposition": f'form-data; name="filename"'})
+            writer.append(filename, headers={"Content-Disposition": 'form-data; name="filename"'})
             writer.append("1", headers={"Content-Disposition": 'form-data; name="nopartial"'})
 
             # Create a payload wrapper for the FIFO file with known size
@@ -718,7 +716,7 @@ class PCloudAPI:
                     )
                     return result
 
-            except asyncio.TimeoutError as err:
+            except TimeoutError as err:
                 _LOGGER.error("Upload timeout for %s: %s", filename, err)
                 # Cancel writer task before closing reader (prevents broken pipe)
                 if stream_writer_task and not stream_writer_task.done():
@@ -779,7 +777,7 @@ class PCloudAPI:
                         _LOGGER.warning("Writer task error: %s", task_err)
 
             # Clean up FIFO
-            if fifo_path and os.path.exists(fifo_path):
+            if fifo_path and os.path.exists(fifo_path):  # noqa: ASYNC240 - cheap local stat; kept to avoid behaviour change
                 try:
                     os.unlink(fifo_path)
                     _LOGGER.debug("Cleaned up FIFO: %s", fifo_path)
@@ -809,8 +807,8 @@ class PCloudAPI:
         This path writes the stream to a temp file in /backup (always available
         on HA installations) and uses the proven async_upload_file_from_path method.
         """
-        import tempfile
         import os
+        import tempfile
 
         temp_path = None
         stream_writer_task = None
@@ -820,7 +818,7 @@ class PCloudAPI:
         try:
             # Use /backup directory (always available on HA OS/Supervised/Container)
             backup_dir = "/backup"
-            if not os.path.exists(backup_dir) or not os.access(backup_dir, os.W_OK):
+            if not os.path.exists(backup_dir) or not os.access(backup_dir, os.W_OK):  # noqa: ASYNC240 - cheap local stat; kept to avoid behaviour change
                 _LOGGER.warning(
                     "/backup not available or not writable. Falling back to system temp directory"
                 )
@@ -828,11 +826,11 @@ class PCloudAPI:
                     backup_dir = tempfile.gettempdir()
                     if not os.access(backup_dir, os.W_OK):
                         raise OSError(f"Temp directory {backup_dir} is not writable")
-                except (OSError, AttributeError):
+                except (OSError, AttributeError) as err:
                     raise PCloudAPIError(
                         "Neither /backup nor system temp directory is available for temp file. "
                         "Cannot upload backup."
-                    )
+                    ) from err
 
             # Create temp file in /backup
             temp_fd, temp_path = tempfile.mkstemp(suffix=".tar", dir=backup_dir)
@@ -909,7 +907,7 @@ class PCloudAPI:
             raise PCloudAPIError(f"Error uploading {filename}: {err}") from err
         finally:
             # Clean up temp file only after successful upload
-            if temp_path and os.path.exists(temp_path):
+            if temp_path and os.path.exists(temp_path):  # noqa: ASYNC240 - cheap local stat; kept to avoid behaviour change
                 try:
                     os.unlink(temp_path)
                     _LOGGER.debug("Cleaned up temp file: %s", temp_path)
@@ -1015,7 +1013,7 @@ class PCloudAPI:
                         _LOGGER.info("Successfully uploaded %s to pCloud", filename)
                         return result
 
-                except asyncio.TimeoutError as err:
+                except TimeoutError as err:
                     total_s = int(req_timeout.total or DEFAULT_TRANSFER_TOTAL_SECONDS)
                     _LOGGER.error("Upload timeout for %s after %d seconds", filename, total_s)
                     raise PCloudAPIError(f"Upload timeout for {filename}") from err
@@ -1095,7 +1093,7 @@ class PCloudAPI:
                 if response.status != 200:
                     raise PCloudAPIError(f"Download failed with status {response.status}")
                 return await response.read()
-        except asyncio.TimeoutError as err:
+        except TimeoutError as err:
             _LOGGER.error("Download timeout for file %d: %s", file_id, err)
             raise PCloudAPIError(f"Download timeout for file {file_id}") from err
         except aiohttp.ClientError as err:
@@ -1202,7 +1200,7 @@ class PCloudAPI:
                         f"Download incomplete: wrote {bytes_downloaded} bytes but file size is {final_stat.st_size} bytes"
                     )
 
-        except asyncio.TimeoutError as err:
+        except TimeoutError as err:
             _LOGGER.error(
                 "Download timeout for file %d after %d seconds", file_id, DOWNLOAD_TIMEOUT.total
             )

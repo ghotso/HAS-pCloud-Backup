@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator, Callable, Coroutine
 import json
 import logging
-import os
-import tempfile
-from collections.abc import AsyncIterator, Callable, Coroutine
 from pathlib import Path
-from urllib.parse import unquote
 from typing import Any
+from urllib.parse import unquote
 
 from homeassistant.components.backup import (
     AgentBackup,
@@ -408,7 +406,7 @@ class PCloudBackupAgent(BackupAgent):
         except PCloudAPIError as err:
             _LOGGER.error("Failed to list backups: %s", err, exc_info=True)
             return []
-        except Exception as err:
+        except Exception:
             _LOGGER.exception("Unexpected error listing backups")
             return []
 

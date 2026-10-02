@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import hashlib
-import logging
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
+import hashlib
+import logging
 from typing import Any
 
 import aiohttp
@@ -34,7 +34,7 @@ class PCloudAuth(ABC):
         """Refresh token if it's expired."""
         pass
 
-    async def close(self) -> None:
+    async def close(self) -> None:  # noqa: B027 - intentional optional no-op hook
         """Clean up resources."""
         pass
 
