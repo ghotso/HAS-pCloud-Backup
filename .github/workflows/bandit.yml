@@ -13,10 +13,9 @@
 name: Bandit
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "dev" ]
+  # Scan every pull request, regardless of its target branch.
   pull_request:
-    # The branches below must be a subset of the branches above
-    branches: [ "main" ]
   schedule:
     - cron: '37 7 * * 1'
 
