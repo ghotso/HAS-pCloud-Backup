@@ -84,12 +84,14 @@ async def test_setup_entry_missing_token(
 async def test_setup_entry_connection_failure(
     hass: HomeAssistant, config_entry: MockConfigEntry, mock_pcloud: dict[str, AsyncMock]
 ) -> None:
-    """A failing connection test makes setup return False."""
+    """A failing connection test makes HA retry setup later (single attempt per try)."""
     mock_pcloud["async_test_connection"].side_effect = PCloudAPIError("unreachable")
 
     assert not await _setup(hass, config_entry)
 
-    assert config_entry.state is ConfigEntryState.SETUP_ERROR
+    assert config_entry.state is ConfigEntryState.SETUP_RETRY
+    mock_pcloud["async_test_connection"].assert_awaited_once_with(retry=False)
+    mock_pcloud["async_close"].assert_awaited_once()
     assert ENTRY_ID not in hass.data.get(DOMAIN, {})
 
 

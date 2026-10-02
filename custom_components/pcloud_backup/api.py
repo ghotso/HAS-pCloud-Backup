@@ -9,6 +9,7 @@ from email.utils import parsedate_to_datetime
 import logging
 import os
 from pathlib import Path
+import time
 from typing import Any
 
 import aiohttp
@@ -69,17 +70,22 @@ async def _async_retry_transient[T](
     attempts = len(delays) + 1
     attempt = 1
     while True:
+        started = time.monotonic()
         try:
             return await func()
         except (TimeoutError, aiohttp.ClientConnectionError) as err:
             if attempt >= attempts:
                 raise
             delay = delays[attempt - 1]
-            _LOGGER.debug(
-                "%s failed (attempt %d of %d): %s; retrying in %gs",
+            # Warning on purpose: transient pCloud failures are otherwise
+            # invisible when a retry succeeds, which makes stalls hard to diagnose.
+            _LOGGER.warning(
+                "%s failed after %.1fs (attempt %d of %d): %s: %s; retrying in %gs",
                 description,
+                time.monotonic() - started,
                 attempt,
                 attempts,
+                type(err).__name__,
                 _describe_error(err),
                 delay,
             )
@@ -152,9 +158,14 @@ class PCloudAPI:
         params: dict[str, Any] | None = None,
         data: dict[str, Any] | None = None,
         files: dict[str, Any] | None = None,
+        *,
+        retry: bool | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
         """Make an API request.
+
+        ``retry`` defaults to True for GET and False for POST; pass False to make
+        a single attempt (e.g. during setup, where Home Assistant retries).
 
         GET requests are idempotent reads (listfolder, userinfo, getfilelink, ...)
         and are retried on timeouts and connection errors. POST requests
@@ -216,7 +227,9 @@ class PCloudAPI:
 
         try:
             result = await _async_retry_transient(
-                f"pCloud request {endpoint}", _send, retry=method == "GET"
+                f"pCloud request {endpoint}",
+                _send,
+                retry=method == "GET" if retry is None else retry,
             )
         except TimeoutError as err:
             raise PCloudAPIError(
@@ -239,10 +252,10 @@ class PCloudAPI:
 
         return result
 
-    async def async_test_connection(self) -> dict[str, Any]:
+    async def async_test_connection(self, *, retry: bool = True) -> dict[str, Any]:
         """Test the API connection and return user info."""
         try:
-            result = await self._request("GET", "/userinfo")
+            result = await self._request("GET", "/userinfo", retry=retry)
             _LOGGER.debug("Connection test successful: %s", result.get("email"))
             return result
         except Exception as err:
@@ -287,24 +300,16 @@ class PCloudAPI:
     async def async_upload_file(
         self, folder_id: int, filename: str, file_data: bytes
     ) -> dict[str, Any]:
-        """Upload a file to pCloud."""
-        # For large files, we might need chunked upload, but for MVP we use simple upload
+        """Upload a small file (e.g. backup metadata) to pCloud.
+
+        Retried on timeouts and connection errors: uploadfile overwrites an
+        existing file with the same name, and nopartial makes pCloud discard
+        a partially received file, so repeating the upload is safe.
+        """
         session = await self._get_session()
 
         # Determine if using OAuth2 (Bearer token) or digest auth (auth parameter)
         is_oauth2 = hasattr(self.auth, "_access_token") and not hasattr(self.auth, "username")
-
-        # Create form data for multipart upload
-        form_data = aiohttp.FormData()
-        form_data.add_field("folderid", str(folder_id))
-        form_data.add_field("filename", filename)
-        form_data.add_field("nopartial", "1")
-        form_data.add_field(
-            "file",
-            file_data,
-            filename=filename,
-            content_type="application/octet-stream",
-        )
 
         url = f"{self._base_url}/uploadfile"
         auth_token = await self.auth.get_auth_token()
@@ -322,24 +327,44 @@ class PCloudAPI:
             if hasattr(self.auth, "update_inactive_expiration"):
                 self.auth.update_inactive_expiration()
 
-        try:
+        async def _send() -> Any:
+            # aiohttp cannot send the same FormData twice: build it per attempt.
+            form_data = aiohttp.FormData()
+            form_data.add_field("folderid", str(folder_id))
+            form_data.add_field("filename", filename)
+            form_data.add_field("nopartial", "1")
+            form_data.add_field(
+                "file",
+                file_data,
+                filename=filename,
+                content_type="application/octet-stream",
+            )
             async with session.post(
                 url, params=params, data=form_data, headers=headers, timeout=STANDARD_TIMEOUT
             ) as response:
-                result = await response.json()
+                return await response.json()
 
-                # Check for pCloud API errors
-                if isinstance(result, dict) and result.get("result") != 0:
-                    error_msg = result.get("error", "Unknown error")
-                    raise PCloudAPIError(f"pCloud API error: {error_msg}")
-
-                return result
+        try:
+            result = await _async_retry_transient(f"pCloud upload of {filename}", _send, retry=True)
         except TimeoutError as err:
-            _LOGGER.error("Upload timeout for %s: %s", filename, err)
-            raise PCloudAPIError(f"Upload timeout for {filename}") from err
+            message = _timeout_message(f"pCloud upload of {filename}", STANDARD_TIMEOUT, err)
+            _LOGGER.error("%s", message)
+            raise PCloudAPIError(message) from err
         except aiohttp.ClientError as err:
-            _LOGGER.error("Network error uploading %s: %s", filename, err)
-            raise PCloudAPIError(f"Network error uploading {filename}: {err}") from err
+            _LOGGER.error("Network error uploading %s: %s", filename, _describe_error(err))
+            raise PCloudAPIError(
+                f"Network error uploading {filename}: {_describe_error(err)}"
+            ) from err
+
+        # Check for pCloud API errors (never retried)
+        if isinstance(result, dict) and result.get("result") != 0:
+            error_code = result.get("result")
+            error_msg = result.get("error", "Unknown error")
+            if error_code in AUTH_ERROR_CODES:
+                raise PCloudAuthError(f"pCloud authentication failed: {error_msg}")
+            raise PCloudAPIError(f"pCloud API error: {error_msg}")
+
+        return result
 
     async def async_upload_file_from_stream(
         self,

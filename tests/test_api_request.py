@@ -207,7 +207,7 @@ async def test_get_gives_up_after_three_attempts_with_backoff(
     "error", [TimeoutError(), aiohttp.ClientConnectionError("reset")], ids=["timeout", "conn"]
 )
 async def test_post_is_never_retried(oauth_api: PCloudAPI, error: Exception) -> None:
-    """Non-idempotent POSTs (createfolder, deletefile, uploads) are not retried."""
+    """Non-idempotent POSTs through _request (createfolder, deletefile) are not retried."""
     with aioresponses() as mocked:
         mocked.post(f"{EU_BASE}/deletefile?fileid=1", exception=error, repeat=True)
         with pytest.raises(PCloudAPIError):
@@ -228,6 +228,94 @@ async def test_api_error_is_not_retried(oauth_api: PCloudAPI) -> None:
             await oauth_api._request("GET", "/listfolder", {"folderid": 0})
 
     assert len(request_calls(mocked, "GET", "/listfolder")) == 1
+
+
+async def test_retry_can_be_disabled(oauth_api: PCloudAPI) -> None:
+    """retry=False makes a single attempt even for GETs (used during setup)."""
+    with aioresponses() as mocked:
+        mocked.get(f"{EU_BASE}/userinfo", exception=TimeoutError(), repeat=True)
+        with pytest.raises(PCloudAPIError, match="timed out"):
+            await oauth_api.async_test_connection(retry=False)
+
+    assert len(request_calls(mocked, "GET", "/userinfo")) == 1
+
+
+async def test_retry_is_logged_as_warning(
+    oauth_api: PCloudAPI, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A retried failure is logged with endpoint, error type and attempt duration."""
+    with aioresponses() as mocked:
+        mocked.get(f"{EU_BASE}/userinfo", exception=aiohttp.ServerDisconnectedError())
+        mocked.get(f"{EU_BASE}/userinfo", payload={"result": 0})
+        await oauth_api._request("GET", "/userinfo")
+
+    (record,) = [r for r in caplog.records if "retrying" in r.getMessage()]
+    assert record.levelname == "WARNING"
+    assert re.search(
+        r"pCloud request /userinfo failed after \d+\.\ds \(attempt 1 of 3\): "
+        r"ServerDisconnectedError: .+; retrying in 0s",
+        record.getMessage(),
+    )
+
+
+# --- Small file upload (backup metadata) ----------------------------------------
+
+
+@pytest.mark.parametrize(
+    "error", [TimeoutError(), aiohttp.ClientConnectionError("reset")], ids=["timeout", "conn"]
+)
+async def test_upload_file_retried_after_transient_error(
+    oauth_api: PCloudAPI, error: Exception
+) -> None:
+    """The metadata upload is retried (uploadfile overwrites, nopartial drops partials)."""
+    with aioresponses() as mocked:
+        mocked.post(f"{EU_BASE}/uploadfile", exception=error)
+        mocked.post(f"{EU_BASE}/uploadfile", payload={"result": 0, "fileids": [7]})
+        result = await oauth_api.async_upload_file(42, "x.metadata.json", b"{}")
+
+    assert result == {"result": 0, "fileids": [7]}
+    calls = request_calls(mocked, "POST", "/uploadfile")
+    assert len(calls) == 2
+    # A fresh multipart body is built for every attempt.
+    assert calls[0].kwargs["data"] is not calls[1].kwargs["data"]
+
+
+async def test_upload_file_gives_up_after_three_attempts(oauth_api: PCloudAPI) -> None:
+    """Persistent connection resets fail with a clear, non-empty message."""
+    with aioresponses() as mocked:
+        mocked.post(
+            f"{EU_BASE}/uploadfile",
+            exception=aiohttp.ClientOSError(104, "Connection reset by peer"),
+            repeat=True,
+        )
+        with pytest.raises(PCloudAPIError, match="Network error uploading x.metadata.json: .+"):
+            await oauth_api.async_upload_file(42, "x.metadata.json", b"{}")
+
+    assert len(request_calls(mocked, "POST", "/uploadfile")) == 3
+
+
+async def test_upload_file_timeout_message(oauth_api: PCloudAPI) -> None:
+    """Upload timeouts name the file and the limit."""
+    with aioresponses() as mocked:
+        mocked.post(f"{EU_BASE}/uploadfile", exception=TimeoutError(), repeat=True)
+        with pytest.raises(
+            PCloudAPIError, match=r"pCloud upload of x.metadata.json timed out after 60s"
+        ):
+            await oauth_api.async_upload_file(42, "x.metadata.json", b"{}")
+
+
+async def test_upload_file_api_error_not_retried(oauth_api: PCloudAPI) -> None:
+    """pCloud API errors from uploadfile are raised at once, auth errors as PCloudAuthError."""
+    with aioresponses() as mocked:
+        mocked.post(
+            f"{EU_BASE}/uploadfile",
+            payload={"result": 1000, "error": "Log in required."},
+            repeat=True,
+        )
+        with pytest.raises(PCloudAuthError):
+            await oauth_api.async_upload_file(42, "x.metadata.json", b"{}")
+
+    assert len(request_calls(mocked, "POST", "/uploadfile")) == 1
 
 
 async def test_unexpected_error_message_is_never_empty(oauth_api: PCloudAPI) -> None:

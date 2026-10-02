@@ -6,7 +6,7 @@ import logging
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 
 from .api import PCloudAPI, PCloudAuthError
 from .auth import create_auth
@@ -66,15 +66,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Create API instance
     api = PCloudAPI(hass=hass, region=region, auth=auth)
 
-    # Verify connection
+    # Verify connection. Single attempt: on failure Home Assistant retries the
+    # setup in the background (ConfigEntryNotReady) instead of blocking startup
+    # and reloads with in-line retries, or leaving the entry failed for good.
     try:
-        await api.async_test_connection()
+        await api.async_test_connection(retry=False)
     except PCloudAuthError as err:
         # Revoked/invalid token: let Home Assistant start the reauth flow.
+        await api.async_close()
         raise ConfigEntryAuthFailed(str(err)) from err
     except Exception as err:
-        _LOGGER.error("Failed to connect to pCloud: %s", err)
-        return False
+        await api.async_close()
+        raise ConfigEntryNotReady(f"Failed to connect to pCloud: {err}") from err
 
     # Store API instance
     hass.data[DOMAIN][entry.entry_id] = api
