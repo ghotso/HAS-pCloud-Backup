@@ -1,4 +1,5 @@
 """Authentication abstraction for pCloud API."""
+
 from __future__ import annotations
 
 import hashlib
@@ -51,7 +52,7 @@ class PCloudDigestAuth(PCloudAuth):
         authinactiveexpire: int | None = None,
     ) -> None:
         """Initialize digest authentication.
-        
+
         Args:
             hass: Home Assistant instance
             region: pCloud region (us/eu)
@@ -75,6 +76,7 @@ class PCloudDigestAuth(PCloudAuth):
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get Home Assistant's aiohttp session."""
         from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
         return async_get_clientsession(self.hass)
 
     async def close(self) -> None:
@@ -111,29 +113,32 @@ class PCloudDigestAuth(PCloudAuth):
         """Check if the current token is expired or about to expire."""
         if not self._auth_token:
             return True
-        
+
         now = datetime.now(dt_util.UTC)
-        
+
         # Check absolute expiration
         if self._token_expire and now >= (self._token_expire - TOKEN_EXPIRY_BUFFER):
             _LOGGER.debug("Token is expired or expiring soon (absolute)")
             return True
-        
+
         # Check inactive expiration
-        if self._token_expire_inactive and now >= (self._token_expire_inactive - TOKEN_EXPIRY_BUFFER):
+        if self._token_expire_inactive and now >= (
+            self._token_expire_inactive - TOKEN_EXPIRY_BUFFER
+        ):
             _LOGGER.debug("Token is expired or expiring soon (inactive)")
             return True
-        
+
         return False
 
     def _parse_pcloud_datetime(self, dt_str: str) -> datetime | None:
         """Parse pCloud datetime string.
-        
+
         pCloud returns dates in RFC 2822 format like: "Fri, 27 Sep 2013 10:15:46 +0000"
         """
         try:
             # Try standard datetime parsing first
             from email.utils import parsedate_to_datetime
+
             parsed_dt = parsedate_to_datetime(dt_str)
             # Ensure timezone-aware (parsedate_to_datetime may return naive)
             if parsed_dt.tzinfo is None:
@@ -143,8 +148,8 @@ class PCloudDigestAuth(PCloudAuth):
             # Fallback: try common formats
             formats = [
                 "%a, %d %b %Y %H:%M:%S %z",  # RFC 2822 with timezone
-                "%a, %d %b %Y %H:%M:%S",     # RFC 2822 without timezone
-                "%Y-%m-%d %H:%M:%S",         # ISO-like
+                "%a, %d %b %Y %H:%M:%S",  # RFC 2822 without timezone
+                "%Y-%m-%d %H:%M:%S",  # ISO-like
             ]
             for fmt in formats:
                 try:
@@ -160,11 +165,11 @@ class PCloudDigestAuth(PCloudAuth):
     def _update_token_expiration(self, result: dict[str, Any]) -> None:
         """Update token expiration information from API response."""
         self._token_created = datetime.now(dt_util.UTC)
-        
+
         # Parse expiration times if provided
         expire = result.get("expire")
         expire_inactive = result.get("expire_inactive")
-        
+
         if expire:
             # expire is a datetime string from pCloud
             parsed_expire = self._parse_pcloud_datetime(expire) if isinstance(expire, str) else None
@@ -181,20 +186,26 @@ class PCloudDigestAuth(PCloudAuth):
         else:
             # Default: 30 days if not specified
             self._token_expire = self._token_created + timedelta(days=30)
-        
+
         if expire_inactive:
             parsed_expire_inactive = (
-                self._parse_pcloud_datetime(expire_inactive) if isinstance(expire_inactive, str) else None
+                self._parse_pcloud_datetime(expire_inactive)
+                if isinstance(expire_inactive, str)
+                else None
             )
             if parsed_expire_inactive:
                 self._token_expire_inactive = parsed_expire_inactive
             elif self._authinactiveexpire:
-                self._token_expire_inactive = self._token_created + timedelta(seconds=self._authinactiveexpire)
+                self._token_expire_inactive = self._token_created + timedelta(
+                    seconds=self._authinactiveexpire
+                )
             else:
                 # Default: 7 days of inactivity
                 self._token_expire_inactive = self._token_created + timedelta(days=7)
         elif self._authinactiveexpire:
-            self._token_expire_inactive = self._token_created + timedelta(seconds=self._authinactiveexpire)
+            self._token_expire_inactive = self._token_created + timedelta(
+                seconds=self._authinactiveexpire
+            )
         else:
             # Default: 7 days of inactivity
             self._token_expire_inactive = self._token_created + timedelta(days=7)
@@ -207,7 +218,7 @@ class PCloudDigestAuth(PCloudAuth):
 
         # Token expired or doesn't exist, get a new one
         _LOGGER.debug("Getting new authentication token")
-        
+
         # Get digest
         digest = await self._get_digest()
 
@@ -225,7 +236,7 @@ class PCloudDigestAuth(PCloudAuth):
             "digest": digest,
             "passworddigest": password_digest,
         }
-        
+
         # Add expiration parameters if specified
         if self._authexpire:
             params["authexpire"] = str(self._authexpire)
@@ -260,11 +271,11 @@ class PCloudDigestAuth(PCloudAuth):
         self._token_expire = None
         self._token_expire_inactive = None
         self._token_created = None
-        
+
         # Re-authenticate to get a new token
         _LOGGER.debug("Refreshing authentication token")
         await self.get_auth_token()
-    
+
     def update_inactive_expiration(self) -> None:
         """Update inactive expiration time (called when token is used)."""
         # According to pCloud docs, expire_inactive is extended each time token is used
@@ -389,4 +400,3 @@ def create_auth(
         config_entry_id=config_entry_id,
         access_token=access_token,
     )
-

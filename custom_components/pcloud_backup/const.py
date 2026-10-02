@@ -1,4 +1,5 @@
 """Constants for the pCloud Backup integration."""
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -58,4 +59,3 @@ ATTR_USED_SPACE = "used_space"
 DATA_BACKUP_AGENT_LISTENERS: HassKey[list[Callable[[], None]]] = HassKey(
     f"{DOMAIN}.backup_agent_listeners"
 )
-

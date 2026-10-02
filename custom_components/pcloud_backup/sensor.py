@@ -1,4 +1,5 @@
 """Sensor platform for pCloud Backup monitoring."""
+
 from __future__ import annotations
 
 import logging
@@ -109,8 +110,7 @@ async def async_setup_entry(
     await coordinator.async_config_entry_first_refresh()
 
     async_add_entities(
-        PCloudBackupSensor(coordinator, description, entry)
-        for description in SENSOR_TYPES
+        PCloudBackupSensor(coordinator, description, entry) for description in SENSOR_TYPES
     )
 
 
@@ -148,9 +148,7 @@ class PCloudBackupCoordinator(DataUpdateCoordinator):
                 _LOGGER.debug("Latest backup: %s", latest_backup.name)
                 last_backup_str = latest_backup.date
                 try:
-                    last_backup_dt = datetime.fromisoformat(
-                        last_backup_str.replace("Z", "+00:00")
-                    )
+                    last_backup_dt = datetime.fromisoformat(last_backup_str.replace("Z", "+00:00"))
                     if last_backup_dt.tzinfo is None:
                         last_backup_dt = last_backup_dt.replace(tzinfo=dt_util.DEFAULT_TIME_ZONE)
                     _LOGGER.debug("Latest backup date: %s", last_backup_dt.isoformat())
@@ -318,4 +316,3 @@ class PCloudBackupSensor(CoordinatorEntity, SensorEntity):
         if self.entity_description.key == "last_sync_status" and self.coordinator._last_sync_error:
             return {"error": self.coordinator._last_sync_error}
         return None
-

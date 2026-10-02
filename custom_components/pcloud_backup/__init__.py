@@ -1,4 +1,5 @@
 """The pCloud Backup integration."""
+
 from __future__ import annotations
 
 import logging
@@ -33,11 +34,11 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
         _LOGGER.warning(
             "Config entry %s uses old digest authentication. "
             "Please remove and re-add the integration to use OAuth2.",
-            config_entry.title
+            config_entry.title,
         )
         # Return False to indicate migration failed (user needs to re-add)
         return False
-    
+
     return True
 
 
@@ -52,7 +53,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if "token" not in entry.data:
         _LOGGER.error("Config entry missing OAuth2 token. Please re-add the integration.")
         return False
-    
+
     auth = create_auth(
         hass=hass,
         region=region,
@@ -77,11 +78,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # during setup is too early: the entry is still SETUP_IN_PROGRESS, so
     # async_get_backup_agents (which uses async_loaded_entries) would skip it
     # and the agent would disappear after a reload (e.g. options change).
-    entry.async_on_unload(
-        entry.async_on_state_change(
-            lambda: _notify_backup_agent_listeners(hass)
-        )
-    )
+    entry.async_on_unload(entry.async_on_state_change(lambda: _notify_backup_agent_listeners(hass)))
 
     # Register update listener
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
