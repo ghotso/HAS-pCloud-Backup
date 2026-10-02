@@ -217,10 +217,32 @@ This is a known issue related to Home Assistant's behavior on certain platforms 
 
 This integration follows Home Assistant's integration development guidelines:
 
-- Python 3.11+
+- Python 3.13+ (Home Assistant 2025.3 or newer)
 - Async/await patterns
 - Type hints throughout
 - Follows integration quality scale
+
+### Running Tests Locally
+
+The test suite uses [pytest-homeassistant-custom-component](https://github.com/MatthewFlamm/pytest-homeassistant-custom-component) and mocks all pCloud HTTP calls, so no pCloud account or credentials are needed.
+
+```bash
+# Create and activate a virtual environment (required on Debian/PEP 668 systems)
+python3.13 -m venv .venv
+source .venv/bin/activate
+
+# Install the pinned test and lint dependencies
+pip install -r requirements_test.txt
+
+# Lint and format checks
+ruff check .
+ruff format --check .   # use `ruff format .` to apply formatting
+
+# Run the tests
+pytest
+```
+
+The same checks run in CI (`.github/workflows/tests.yml`) on every push and pull request. Tests live in `tests/`, with sample pCloud API responses in `tests/fixtures/`.
 
 ### Versioning
 

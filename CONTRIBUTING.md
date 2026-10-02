@@ -86,10 +86,27 @@ When you push to `main`:
 
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feat/my-new-feature`)
-3. Make your changes
-4. Commit using conventional commit format
-5. Push to your fork (`git push origin feat/my-new-feature`)
-6. Create a Pull Request
+3. Make your changes (add or update tests in `tests/` where it makes sense)
+4. Run the checks locally (see below)
+5. Commit using conventional commit format
+6. Push to your fork (`git push origin feat/my-new-feature`)
+7. Create a Pull Request
+
+### Running Checks Locally
+
+Use a virtual environment with Python 3.13 and install the pinned dependencies:
+
+```bash
+python3.13 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements_test.txt
+
+ruff check .
+ruff format --check .
+pytest
+```
+
+The same Ruff and pytest checks run in CI on every push and pull request and must pass before merging. No pCloud credentials are needed: all API calls are mocked.
 
 ## Version Numbers
 
