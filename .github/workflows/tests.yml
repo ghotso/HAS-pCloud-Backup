@@ -2,7 +2,9 @@ name: Tests
 
 on:
   push:
+    branches: [main, dev]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -11,16 +13,18 @@ concurrency:
   group: tests-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Job names "Ruff" and "Pytest" are required status checks on main - do not rename.
 jobs:
   lint:
     name: Ruff
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
           cache: pip
@@ -38,12 +42,13 @@ jobs:
   pytest:
     name: Pytest
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
           cache: pip
@@ -51,6 +56,40 @@ jobs:
 
       - name: Install test dependencies
         run: python -m pip install -r requirements_test.txt
+
+      - name: Run pytest
+        run: python -m pytest -q
+
+  pytest-min-ha:
+    # Oldest Home Assistant version supported per hacs.json; catches use of newer HA APIs.
+    name: Pytest (minimum HA)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: .github/ci/requirements_test_min.txt
+
+      - name: Check pin matches hacs.json minimum
+        run: |
+          min_ha=$(python -c "import json; print(json.load(open('hacs.json'))['homeassistant'])")
+          plugin=$(grep -E '^pytest-homeassistant-custom-component==' .github/ci/requirements_test_min.txt)
+          echo "hacs.json minimum: $min_ha, test plugin: $plugin"
+          pinned=$(curl -fsS "https://pypi.org/pypi/pytest-homeassistant-custom-component/${plugin#*==}/json" \
+            | python -c "import json,sys; print(next(r.split('==')[1] for r in json.load(sys.stdin)['info']['requires_dist'] if r.startswith('homeassistant==')))")
+          if [ "$pinned" != "$min_ha" ]; then
+            echo "::error file=.github/ci/requirements_test_min.txt::Test plugin pins homeassistant==$pinned but hacs.json minimum is $min_ha"
+            exit 1
+          fi
+
+      - name: Install test dependencies
+        run: python -m pip install -r .github/ci/requirements_test_min.txt
 
       - name: Run pytest
         run: python -m pytest -q

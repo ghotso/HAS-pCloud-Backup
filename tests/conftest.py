@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Generator
 from unittest.mock import AsyncMock, create_autospec, patch
 
+from homeassistant.core import HomeAssistant
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -25,6 +26,21 @@ from .common import (
 @pytest.fixture(autouse=True)
 def auto_enable_custom_integrations(enable_custom_integrations: None) -> None:
     """Enable loading custom integrations in all tests."""
+
+
+@pytest.fixture(autouse=True)
+def initialize_backup(hass: HomeAssistant) -> None:
+    """Initialize backup data like HA bootstrap does on older HA versions.
+
+    On older HA versions (incl. the minimum supported 2025.3), bootstrap calls
+    helpers.backup.async_initialize_backup() before the backup component is set
+    up; the test harness skips bootstrap, so do it here. Newer HA removed it.
+    """
+    try:
+        from homeassistant.helpers.backup import async_initialize_backup
+    except ImportError:
+        return
+    async_initialize_backup(hass)
 
 
 @pytest.fixture

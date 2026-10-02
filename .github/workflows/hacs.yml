@@ -1,19 +1,30 @@
 name: HACS Validation
 permissions:
   contents: read
-  
+
 on:
   push:
+    branches: [main, dev]
   pull_request:
+  # Weekly run catches new upstream HACS rules before the next PR does.
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
+  # Job name is a required status check on main - do not rename.
   hacs:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: HACS validation
-        uses: hacs/action@main
+        uses: hacs/action@main # upstream recommends tracking main; weekly run catches changes
         with:
           category: integration
