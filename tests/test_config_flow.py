@@ -19,11 +19,9 @@ from custom_components.pcloud_backup.config_flow import (
 )
 from custom_components.pcloud_backup.const import (
     CONF_BACKUP_FOLDER,
-    CONF_PERMANENT_DELETE,
     CONF_REGION,
     CONF_UPLOAD_TIMEOUT_SECONDS,
     DEFAULT_BACKUP_FOLDER,
-    DEFAULT_PERMANENT_DELETE,
     DEFAULT_UPLOAD_TIMEOUT_SECONDS,
     DOMAIN,
     MAX_UPLOAD_TIMEOUT_SECONDS,
@@ -35,7 +33,6 @@ from .common import ACCESS_TOKEN, BACKUP_FOLDER, load_json_fixture
 USER_INPUT = {
     CONF_BACKUP_FOLDER: "/My Backups",
     CONF_UPLOAD_TIMEOUT_SECONDS: 7200,
-    CONF_PERMANENT_DELETE: True,
 }
 TOKEN_DATA = {
     "auth_implementation": "pcloud_backup",
@@ -50,7 +47,6 @@ def _schema(**overrides) -> vol.Schema:
     kwargs = {
         "backup_folder_default": DEFAULT_BACKUP_FOLDER,
         "upload_timeout_default": DEFAULT_UPLOAD_TIMEOUT_SECONDS,
-        "permanent_delete_default": DEFAULT_PERMANENT_DELETE,
     }
     kwargs.update(overrides)
     return _backup_options_schema(**kwargs)
@@ -61,9 +57,7 @@ def test_options_schema_defaults() -> None:
     assert _schema()({}) == {
         CONF_BACKUP_FOLDER: DEFAULT_BACKUP_FOLDER,
         CONF_UPLOAD_TIMEOUT_SECONDS: DEFAULT_UPLOAD_TIMEOUT_SECONDS,
-        CONF_PERMANENT_DELETE: False,
     }
-    assert _schema(permanent_delete_default=True)({})[CONF_PERMANENT_DELETE] is True
 
 
 @pytest.mark.parametrize(
@@ -100,14 +94,13 @@ async def test_options_flow_shows_current_values(
     assert result["data_schema"]({}) == {
         CONF_BACKUP_FOLDER: BACKUP_FOLDER,
         CONF_UPLOAD_TIMEOUT_SECONDS: 3600,
-        CONF_PERMANENT_DELETE: False,
     }
 
 
 async def test_options_flow_persists_options(
     hass: HomeAssistant, config_entry: MockConfigEntry
 ) -> None:
-    """Folder, timeout and permanent_delete are stored on the entry."""
+    """Folder and timeout are stored on the entry."""
     config_entry.add_to_hass(hass)
     result = await hass.config_entries.options.async_init(config_entry.entry_id)
 

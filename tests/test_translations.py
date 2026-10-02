@@ -92,9 +92,7 @@ def test_no_orphan_sensor_translations() -> None:
 def test_option_fields_are_translated() -> None:
     """All fields of the shared options schema have labels in both steps."""
     strings = _load(STRINGS)
-    schema = _backup_options_schema(
-        backup_folder_default="/", upload_timeout_default=600, permanent_delete_default=False
-    )
+    schema = _backup_options_schema(backup_folder_default="/", upload_timeout_default=600)
     fields = {str(key) for key in schema.schema}
     assert fields <= set(strings["config"]["step"]["folder_path"]["data"])
     assert fields <= set(strings["options"]["step"]["init"]["data"])

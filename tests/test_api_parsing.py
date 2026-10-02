@@ -95,16 +95,6 @@ async def test_delete_file_contract(api: PCloudAPI) -> None:
     assert call.kwargs["params"] == {"fileid": 101}
 
 
-async def test_trash_clear_contract(api: PCloudAPI) -> None:
-    """async_trash_clear -> POST /trash_clear with fileid."""
-    with aioresponses() as mocked:
-        mocked.post(f"{EU_BASE}/trash_clear?fileid=101", payload={"result": 0})
-        await api.async_trash_clear(101)
-
-    (call,) = request_calls(mocked, "POST", "/trash_clear")
-    assert call.kwargs["params"] == {"fileid": 101}
-
-
 async def test_list_folder_returns_files_only(api: PCloudAPI) -> None:
     """async_list_folder -> GET /listfolder and drops sub-folders."""
     with aioresponses() as mocked:

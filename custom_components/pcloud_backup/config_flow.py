@@ -15,11 +15,9 @@ from .api import PCloudAPI, PCloudAPIError
 from .auth import create_auth
 from .const import (
     CONF_BACKUP_FOLDER,
-    CONF_PERMANENT_DELETE,
     CONF_REGION,
     CONF_UPLOAD_TIMEOUT_SECONDS,
     DEFAULT_BACKUP_FOLDER,
-    DEFAULT_PERMANENT_DELETE,
     DEFAULT_UPLOAD_TIMEOUT_SECONDS,
     DOMAIN,
     MAX_UPLOAD_TIMEOUT_SECONDS,
@@ -37,7 +35,6 @@ def _backup_options_schema(
     *,
     backup_folder_default: str,
     upload_timeout_default: int,
-    permanent_delete_default: bool,
 ) -> vol.Schema:
     """Shared schema for initial setup (folder_path) and integration options."""
     return vol.Schema(
@@ -53,7 +50,6 @@ def _backup_options_schema(
                     max=MAX_UPLOAD_TIMEOUT_SECONDS,
                 ),
             ),
-            vol.Required(CONF_PERMANENT_DELETE, default=permanent_delete_default): bool,
         }
     )
 
@@ -76,9 +72,6 @@ class PCloudOptionsFlowHandler(OptionsFlow):
                         CONF_UPLOAD_TIMEOUT_SECONDS,
                         DEFAULT_UPLOAD_TIMEOUT_SECONDS,
                     )
-                ),
-                permanent_delete_default=options.get(
-                    CONF_PERMANENT_DELETE, DEFAULT_PERMANENT_DELETE
                 ),
             ),
         )
@@ -424,7 +417,6 @@ class PCloudConfigFlow(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domai
             upload_timeout_s = int(
                 user_input.get(CONF_UPLOAD_TIMEOUT_SECONDS, DEFAULT_UPLOAD_TIMEOUT_SECONDS)
             )
-            permanent_delete = user_input.get(CONF_PERMANENT_DELETE, DEFAULT_PERMANENT_DELETE)
 
             # Test connection and validate folder path
             try:
@@ -471,7 +463,6 @@ class PCloudConfigFlow(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domai
                         options={
                             CONF_BACKUP_FOLDER: backup_folder,
                             CONF_UPLOAD_TIMEOUT_SECONDS: upload_timeout_s,
-                            CONF_PERMANENT_DELETE: permanent_delete,
                         },
                     )
             except AbortFlow:
@@ -490,7 +481,6 @@ class PCloudConfigFlow(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domai
             data_schema=_backup_options_schema(
                 backup_folder_default=DEFAULT_BACKUP_FOLDER,
                 upload_timeout_default=DEFAULT_UPLOAD_TIMEOUT_SECONDS,
-                permanent_delete_default=DEFAULT_PERMANENT_DELETE,
             ),
             errors=errors,
         )

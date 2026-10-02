@@ -8,7 +8,6 @@ from typing import Any
 
 from custom_components.pcloud_backup.const import (
     CONF_BACKUP_FOLDER,
-    CONF_PERMANENT_DELETE,
     CONF_REGION,
     CONF_UPLOAD_TIMEOUT_SECONDS,
 )
@@ -39,7 +38,6 @@ ENTRY_DATA: dict[str, Any] = {
 ENTRY_OPTIONS: dict[str, Any] = {
     CONF_BACKUP_FOLDER: BACKUP_FOLDER,
     CONF_UPLOAD_TIMEOUT_SECONDS: 3600,
-    CONF_PERMANENT_DELETE: False,
 }
 
 

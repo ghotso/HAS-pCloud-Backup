@@ -68,16 +68,15 @@ The integration uses OAuth2 authentication for secure access to your pCloud acco
 4. You'll be redirected back to the cloud Home Assistant redirect page
 5. If not already entered, enter the address of your Home Assistant installation and click **Link account**
 
-#### Step 3: Configure Storage Path, Upload Timeout & Deletion
+#### Step 3: Configure Storage Path & Upload Timeout
 
 1. You'll be prompted for the **pCloud folder path** where backups will be stored
 2. Default path: `/HomeAssistant/Backups`
 3. You can customize this path (e.g., `/Backups/HomeAssistant` or `/MyBackups`)
 4. You'll also set **Upload timeout (seconds)** — this is the maximum wall‑clock time allowed for **one** backup upload over HTTPS (large backups on slow links need a higher value). **Default: 86400 seconds (24 hours).** Allowed range: **600–172800** seconds (10 minutes–48 hours).
-5. Optionally enable **Permanently delete backups (skip Trash)** — see [Deleting backups](#deleting-backups). **Default: off.**
-6. Click **Submit**
+5. Click **Submit**
 
-> **Note:** You can change all of these options (folder path, upload timeout and permanent delete) at any time under **Settings** → **Devices & services** → **pCloud Backup** → **Configure**. When you save, Home Assistant reloads the integration entry automatically so new values apply to the next backup operation.
+> **Note:** You can change the backup folder path and the upload timeout at any time under **Settings** → **Devices & services** → **pCloud Backup** → **Configure**. When you save, Home Assistant reloads the integration entry automatically so new values apply to the next backup operation.
 >
 > Changing the **folder path** does not move existing backups. Backups already stored in the old folder will no longer be listed in Home Assistant — move them to the new folder in pCloud if you want to keep them visible.
 
@@ -105,8 +104,6 @@ Once configured, the integration will:
 **Region Detection:** The integration automatically detects whether your pCloud account uses the EU or US datacenter based on the OAuth2 callback response. No manual configuration needed — the detected region is shown in the integration title, e.g. *pCloud Backup (EU)*.
 
 **Upload timeout:** The maximum duration (in **seconds**) for a single backup upload is configurable during setup and at any time under the integration’s **Configure** dialog. Default **86400** (24 hours); allowed **600–172800** (10 minutes–48 hours). Raise it if very large backups fail with upload timeouts on a slow uplink.
-
-**Permanent delete:** When enabled, deleting a backup also removes it (and its metadata file) from the pCloud Trash, freeing storage immediately. Default **off**: deleted backups stay recoverable in the pCloud Trash.
 
 ## Sensors
 
@@ -136,7 +133,9 @@ Retention, encryption, scheduling and all other logic are entirely handled by th
 
 ### Deleting Backups
 
-Backups deleted in Home Assistant are moved to the **pCloud Trash** by default, where they stay recoverable (and keep using storage) until the Trash is emptied. If **Permanently delete backups (skip Trash)** is enabled in the integration options, deleted backups are also purged from the Trash immediately and **cannot be recovered**.
+Backups deleted in Home Assistant (manually or by the backup retention settings) are moved to the **pCloud Trash**, together with their metadata file. They stay recoverable there — and keep counting against your pCloud storage — until the Trash is emptied in pCloud or the items expire according to your pCloud plan.
+
+> **Note:** The integration cannot empty the pCloud Trash for you: pCloud's Trash API does not accept OAuth tokens, which this integration uses for authentication. Empty the Trash in the pCloud web or app if you need the space back immediately.
 
 ### Viewing Backups
 

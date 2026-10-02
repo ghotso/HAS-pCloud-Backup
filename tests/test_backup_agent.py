@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 import json
-import logging
 from unittest.mock import call
 
 from homeassistant.components.backup import AgentBackup, BackupAgentError, BackupNotFound
@@ -19,7 +18,6 @@ from custom_components.pcloud_backup.backup import (
     PCloudBackupError,
 )
 from custom_components.pcloud_backup.const import (
-    CONF_PERMANENT_DELETE,
     CONF_UPLOAD_TIMEOUT_SECONDS,
     DOMAIN,
 )
@@ -208,14 +206,13 @@ async def test_get_backup_api_error(agent: PCloudBackupAgent, mock_api) -> None:
 
 
 async def test_delete_backup_moves_to_trash(agent: PCloudBackupAgent, mock_api) -> None:
-    """Default delete removes backup + metadata but keeps them in Trash."""
+    """Delete removes backup + metadata (pCloud keeps them in its Trash)."""
     await agent.async_delete_backup("a1b2c3d4")
 
     assert mock_api.async_delete_file.await_args_list == [
         call(PAIRED_FILE_ID),
         call(PAIRED_METADATA_FILE_ID),
     ]
-    mock_api.async_trash_clear.assert_not_called()
 
 
 async def test_delete_backup_without_metadata(agent: PCloudBackupAgent, mock_api) -> None:
@@ -223,41 +220,6 @@ async def test_delete_backup_without_metadata(agent: PCloudBackupAgent, mock_api
     await agent.async_delete_backup(ORPHAN_BACKUP_ID)
 
     mock_api.async_delete_file.assert_awaited_once_with(ORPHAN_FILE_ID)
-
-
-async def test_delete_backup_permanent(
-    hass: HomeAssistant, agent: PCloudBackupAgent, mock_api, caplog: pytest.LogCaptureFixture
-) -> None:
-    """permanent_delete also purges both files from Trash."""
-    _set_options(hass, **{CONF_PERMANENT_DELETE: True})
-
-    await agent.async_delete_backup("a1b2c3d4")
-
-    assert mock_api.async_delete_file.await_args_list == [
-        call(PAIRED_FILE_ID),
-        call(PAIRED_METADATA_FILE_ID),
-    ]
-    assert mock_api.async_trash_clear.await_args_list == [
-        call(PAIRED_FILE_ID),
-        call(PAIRED_METADATA_FILE_ID),
-    ]
-    assert "permanently purging" not in caplog.text
-
-
-async def test_delete_backup_permanent_trash_clear_failure_warns(
-    hass: HomeAssistant, agent: PCloudBackupAgent, mock_api, caplog: pytest.LogCaptureFixture
-) -> None:
-    """A failing trash_clear does not fail the delete but logs a warning."""
-    _set_options(hass, **{CONF_PERMANENT_DELETE: True})
-    mock_api.async_trash_clear.side_effect = [PCloudAPIError("trash busy"), None]
-
-    with caplog.at_level(logging.WARNING):
-        await agent.async_delete_backup("a1b2c3d4")
-
-    assert mock_api.async_delete_file.await_count == 2
-    assert mock_api.async_trash_clear.await_count == 2
-    assert "Failed to purge backup for backup a1b2c3d4 from Trash: trash busy" in caplog.text
-    assert "permanently purging one or more related files" in caplog.text
 
 
 async def test_delete_metadata_failure_is_not_fatal(
@@ -283,15 +245,6 @@ async def test_delete_backup_api_error(agent: PCloudBackupAgent, mock_api) -> No
     mock_api.async_delete_file.side_effect = PCloudAPIError("denied")
     with pytest.raises(PCloudBackupError, match="denied"):
         await agent.async_delete_backup("a1b2c3d4")
-
-
-@pytest.mark.parametrize("file_id", [None, 0, -1, "101"])
-async def test_trash_clear_skips_invalid_file_ids(
-    agent: PCloudBackupAgent, mock_api, file_id: object
-) -> None:
-    """Invalid file IDs are never sent to trash_clear."""
-    assert await agent._async_trash_clear(file_id, "b", "backup") is False
-    mock_api.async_trash_clear.assert_not_called()
 
 
 # --- upload -----------------------------------------------------------------
