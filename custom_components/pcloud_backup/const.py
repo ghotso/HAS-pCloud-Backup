@@ -33,6 +33,12 @@ CONF_USERNAME = "username"
 CONF_PASSWORD = "password"
 CONF_BACKUP_FOLDER = "backup_folder"
 CONF_UPLOAD_TIMEOUT_SECONDS = "upload_timeout_seconds"
+CONF_PERMANENT_DELETE = "permanent_delete"
+
+# When True, deleted backups are also purged from Trash (trash_clear),
+# freeing quota immediately. When False (default), deletefile only -
+# deleted backups remain recoverable via pCloud Trash.
+DEFAULT_PERMANENT_DELETE = False
 
 # Maximum time for a single upload HTTP request (large backups over slow links).
 # Default 24 hours; configurable in integration options.

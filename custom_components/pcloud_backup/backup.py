@@ -22,9 +22,11 @@ from homeassistant.core import HomeAssistant, callback
 from .api import PCloudAPI, PCloudAPIError
 from .const import (
     CONF_BACKUP_FOLDER,
+    CONF_PERMANENT_DELETE,
     CONF_UPLOAD_TIMEOUT_SECONDS,
     DATA_BACKUP_AGENT_LISTENERS,
     DEFAULT_BACKUP_FOLDER,
+    DEFAULT_PERMANENT_DELETE,
     DEFAULT_UPLOAD_TIMEOUT_SECONDS,
     DOMAIN,
 )
@@ -668,19 +670,41 @@ class PCloudBackupAgent(BackupAgent):
             if file_id is None:
                 raise BackupNotFound(f"Backup {backup_name} has no file ID")
 
+            permanent_delete = options.get(
+                CONF_PERMANENT_DELETE, DEFAULT_PERMANENT_DELETE
+            )
+
             _LOGGER.info("Deleting backup %s from pCloud", backup_name)
             await self.api.async_delete_file(file_id)
-            # Also remove metadata file if present
+            purge_failed = False
+            if permanent_delete:
+                purge_failed |= not await self._async_trash_clear(
+                    file_id, backup_name, "backup"
+                )
+            # Also remove metadata file if present. _async_trash_clear never
+            # raises, so this try/except only guards async_delete_file.
             metadata_item = metadata_files.get(metadata_key)
             if metadata_item and metadata_item.get("fileid"):
                 try:
                     await self.api.async_delete_file(metadata_item["fileid"])
+                    if permanent_delete:
+                        purge_failed |= not await self._async_trash_clear(
+                            metadata_item["fileid"], backup_name, "metadata"
+                        )
                 except Exception as err:  # noqa: BLE001
                     _LOGGER.warning(
                         "Failed to delete metadata for backup %s: %s", backup_name, err
                     )
 
-            _LOGGER.info("Successfully deleted backup %s", backup_name)
+            if permanent_delete and purge_failed:
+                _LOGGER.warning(
+                    "Deleted backup %s, but permanently purging one or more "
+                    "related files from pCloud Trash failed — they may still "
+                    "be recoverable until Trash is emptied",
+                    backup_name,
+                )
+            else:
+                _LOGGER.info("Successfully deleted backup %s", backup_name)
 
         except BackupNotFound:
             # Re-raise BackupNotFound as-is (it's already a BackupAgentError subclass)
@@ -692,6 +716,34 @@ class PCloudBackupAgent(BackupAgent):
             _LOGGER.exception("Unexpected error deleting backup")
             raise PCloudBackupError(f"Unexpected error deleting backup: {err}") from err
 
+    async def _async_trash_clear(
+        self, file_id: int, backup_name: str, file_kind: str
+    ) -> bool:
+        """Permanently purge a deleted file from Trash.
 
+        Best-effort: failures are logged but don't fail the overall delete,
+        since deletefile already succeeded and the backup is no longer
+        listed - it would just remain in Trash until manually emptied.
+        Returns True if the file was purged, False otherwise.
+        """
+        if not isinstance(file_id, int) or file_id <= 0:
+            _LOGGER.warning(
+                "Skipping Trash purge of %s for backup %s: invalid file ID %r",
+                file_kind,
+                backup_name,
+                file_id,
+            )
+            return False
+        try:
+            await self.api.async_trash_clear(file_id)
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning(
+                "Failed to purge %s for backup %s from Trash: %s",
+                file_kind,
+                backup_name,
+                err,
+            )
+            return False
+        return True
 
 

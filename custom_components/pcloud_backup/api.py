@@ -1047,6 +1047,13 @@ class PCloudAPI:
         """Delete a file from pCloud."""
         await self._request("POST", "/deletefile", {"fileid": file_id})
 
+    async def async_trash_clear(self, file_id: int) -> None:
+        """Permanently remove a file from Trash, freeing quota immediately.
+
+        Intended to be called after async_delete_file with the same file_id.
+        """
+        await self._request("POST", "/trash_clear", {"fileid": file_id})
+
     async def async_download_file(self, file_id: int) -> bytes:
         """Download a small file from pCloud (returns bytes).
         
