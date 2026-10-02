@@ -179,7 +179,7 @@ The integration follows pCloud's OAuth2 flow and ensures your credentials remain
 - **OAuth2 authorization failed**: Make sure you complete the authorization flow in your browser
 - **Authentication failed**: Check that your pCloud account is active and accessible
 - **Region**: The region is detected automatically; the integration title shows which one is in use, e.g. *pCloud Backup (EU)*
-- **Token expired**: If you encounter authentication errors, try removing and re-adding the integration
+- **Re-authentication required**: pCloud access tokens do not expire, but they stop working if access is revoked (for example after a password change or after removing the app's access in your pCloud account settings). Home Assistant then shows *Re-authentication required* for the integration under **Settings → Devices & services**; select **Re-authenticate** and sign in to the same pCloud account again. Your backup folder and options are kept
 
 ### Connection Issues
 

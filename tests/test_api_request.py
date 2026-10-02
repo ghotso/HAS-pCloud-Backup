@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from unittest.mock import AsyncMock, patch
 
 import aiohttp
@@ -10,7 +11,12 @@ from homeassistant.core import HomeAssistant
 import pytest
 
 from custom_components.pcloud_backup import api as api_module
-from custom_components.pcloud_backup.api import STANDARD_TIMEOUT, PCloudAPI, PCloudAPIError
+from custom_components.pcloud_backup.api import (
+    STANDARD_TIMEOUT,
+    PCloudAPI,
+    PCloudAPIError,
+    PCloudAuthError,
+)
 from custom_components.pcloud_backup.auth import PCloudDigestAuth, PCloudOAuth2Auth
 
 from .common import ACCESS_TOKEN, EU_BASE, request_calls
@@ -72,56 +78,45 @@ async def test_api_error_raises(oauth_api: PCloudAPI) -> None:
             await oauth_api._request("GET", "/userinfo")
 
 
-async def test_auth_error_refreshes_and_retries_once(oauth_api: PCloudAPI) -> None:
-    """Auth error 1000 triggers one token refresh and a single retry."""
-    get_token = AsyncMock(side_effect=["old-token", "new-token"])
+@pytest.mark.parametrize(
+    ("code", "message"),
+    [
+        (1000, "Log in required."),
+        (2000, "Log in failed."),
+        (2094, "Invalid 'access_token' provided."),
+    ],
+)
+async def test_auth_error_raises_auth_error_without_refresh(
+    oauth_api: PCloudAPI, code: int, message: str
+) -> None:
+    """pCloud auth errors raise PCloudAuthError at once: no refresh, no retry."""
     refresh = AsyncMock()
     with (
         aioresponses() as mocked,
-        patch.object(oauth_api.auth, "get_auth_token", get_token),
         patch.object(oauth_api.auth, "refresh_token_if_needed", refresh),
     ):
-        mocked.get(f"{EU_BASE}/userinfo", payload={"result": 1000, "error": "Log in required."})
-        mocked.get(f"{EU_BASE}/userinfo", payload={"result": 0, "email": "ok"})
-        result = await oauth_api._request("GET", "/userinfo")
-
-    assert result == {"result": 0, "email": "ok"}
-    refresh.assert_awaited_once()
-    calls = request_calls(mocked, "GET", "/userinfo")
-    assert len(calls) == 2
-    assert calls[1].kwargs["headers"]["Authorization"] == "Bearer new-token"
-
-
-async def test_auth_error_refresh_failure_raises(oauth_api: PCloudAPI) -> None:
-    """If the refresh fails, the original pCloud error is raised."""
-    with (
-        aioresponses() as mocked,
-        patch.object(
-            oauth_api.auth, "refresh_token_if_needed", AsyncMock(side_effect=RuntimeError("nope"))
-        ),
-    ):
-        mocked.get(f"{EU_BASE}/userinfo", payload={"result": 1000, "error": "Log in required."})
-        with pytest.raises(PCloudAPIError, match="Log in required"):
+        mocked.get(f"{EU_BASE}/userinfo", payload={"result": code, "error": message}, repeat=True)
+        with pytest.raises(PCloudAuthError, match=re.escape(message)):
             await oauth_api._request("GET", "/userinfo")
 
+    refresh.assert_not_awaited()
     assert len(request_calls(mocked, "GET", "/userinfo")) == 1
 
 
-async def test_auth_error_persisting_after_retry_raises(oauth_api: PCloudAPI) -> None:
-    """A second auth error after the retry is not retried again."""
-    with (
-        aioresponses() as mocked,
-        patch.object(oauth_api.auth, "refresh_token_if_needed", AsyncMock()),
-    ):
+@pytest.mark.parametrize("code", [1001, 1002, 2003])
+async def test_non_auth_errors_are_plain_api_errors(oauth_api: PCloudAPI, code: int) -> None:
+    """Parameter / permission errors are not treated as credential problems."""
+    with aioresponses() as mocked:
         mocked.post(
             f"{EU_BASE}/deletefile?fileid=1",
-            payload={"result": 1002, "error": "No full path or name/folderid provided."},
+            payload={"result": code, "error": "No full path or name/folderid provided."},
             repeat=True,
         )
-        with pytest.raises(PCloudAPIError, match="No full path"):
+        with pytest.raises(PCloudAPIError, match="No full path") as exc_info:
             await oauth_api._request("POST", "/deletefile", {"fileid": 1})
 
-    assert len(request_calls(mocked, "POST", "/deletefile")) == 2
+    assert not isinstance(exc_info.value, PCloudAuthError)
+    assert len(request_calls(mocked, "POST", "/deletefile")) == 1
 
 
 async def test_network_error_is_wrapped(oauth_api: PCloudAPI) -> None:

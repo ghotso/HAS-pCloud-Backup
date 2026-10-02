@@ -336,40 +336,11 @@ class PCloudOAuth2Auth(PCloudAuth):
         return self._access_token
 
     async def refresh_token_if_needed(self) -> None:
-        """Refresh OAuth2 token via Home Assistant when possible."""
-        if self._config_entry_id is None:
-            return
+        """Do nothing: pCloud OAuth2 access tokens do not expire.
 
-        entry = self.hass.config_entries.async_get_entry(self._config_entry_id)
-        if entry is None:
-            return
-
-        if "auth_implementation" not in entry.data:
-            _LOGGER.debug(
-                "Skipping OAuth refresh: config entry %s has no auth_implementation",
-                self._config_entry_id,
-            )
-            return
-
-        try:
-            from homeassistant.helpers.config_entry_oauth2_flow import (
-                OAuth2Session,
-                async_get_config_entry_implementation,
-            )
-        except ImportError:
-            return
-
-        try:
-            impl = await async_get_config_entry_implementation(self.hass, entry)
-        except ValueError as err:
-            _LOGGER.warning("Could not resolve OAuth implementation: %s", err)
-            return
-
-        try:
-            session = OAuth2Session(self.hass, entry, impl)
-            await session.async_ensure_token_valid()
-        except Exception as err:
-            _LOGGER.warning("OAuth token refresh failed: %s", err)
+        pCloud issues no refresh tokens, so there is nothing to refresh. A
+        revoked token is handled by Home Assistant's reauthentication flow.
+        """
 
     async def close(self) -> None:
         """Close OAuth2 session."""

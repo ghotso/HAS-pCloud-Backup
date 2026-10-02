@@ -18,7 +18,7 @@ from homeassistant.components.backup import (
 )
 from homeassistant.core import HomeAssistant, callback
 
-from .api import PCloudAPI, PCloudAPIError
+from .api import PCloudAPI, PCloudAPIError, PCloudAuthError
 from .const import (
     CONF_BACKUP_FOLDER,
     CONF_UPLOAD_TIMEOUT_SECONDS,
@@ -115,6 +115,18 @@ class PCloudBackupError(BackupAgentError):
     """Base exception for pCloud backup errors."""
 
     pass
+
+
+class PCloudBackupAuthError(PCloudBackupError):
+    """pCloud rejected the stored credentials; the entry needs reauthentication."""
+
+    def __init__(self) -> None:
+        """Initialize with a message telling the user how to fix it."""
+        super().__init__(
+            "pCloud authentication failed (access token revoked or invalid). "
+            "Re-authenticate the pCloud Backup integration in Settings > "
+            "Devices & services."
+        )
 
 
 class PCloudBackupAgent(BackupAgent):
@@ -373,6 +385,14 @@ class PCloudBackupAgent(BackupAgent):
             self._api = api
         return self._api
 
+    def _auth_failed(self, err: PCloudAuthError) -> PCloudBackupAuthError:
+        """Start the reauth flow for the entry and return the error to raise."""
+        _LOGGER.error("pCloud rejected the access token: %s", err)
+        if entry := self.hass.config_entries.async_get_entry(self.config_entry_id):
+            # Home Assistant ignores this if a reauth flow is already in progress.
+            entry.async_start_reauth(self.hass)
+        return PCloudBackupAuthError()
+
     @property
     def _metadata_cache(self) -> BackupMetadataCache | None:
         """Return the metadata cache of the config entry (None if not set up)."""
@@ -426,6 +446,8 @@ class PCloudBackupAgent(BackupAgent):
 
         except BackupNotFound:
             raise
+        except PCloudAuthError as err:
+            raise self._auth_failed(err) from err
         except PCloudAPIError as err:
             _LOGGER.error("Failed to get backup: %s", err, exc_info=True)
             raise PCloudBackupError(f"Failed to get backup: {err}") from err
@@ -434,7 +456,11 @@ class PCloudBackupAgent(BackupAgent):
             raise PCloudBackupError(f"Unexpected error getting backup: {err}") from err
 
     async def async_list_backups(self, **kwargs: Any) -> list[AgentBackup]:
-        """List all backups in pCloud."""
+        """List all backups in pCloud.
+
+        API errors are logged and yield an empty list, except authentication
+        errors, which start the reauth flow and raise PCloudBackupAuthError.
+        """
         try:
             config_entry = self.hass.config_entries.async_get_entry(self.config_entry_id)
             if config_entry is None:
@@ -455,6 +481,8 @@ class PCloudBackupAgent(BackupAgent):
             _LOGGER.info("Returning %d backups from pCloud", len(backups))
             return backups
 
+        except PCloudAuthError as err:
+            raise self._auth_failed(err) from err
         except PCloudAPIError as err:
             _LOGGER.error("Failed to list backups: %s", err, exc_info=True)
             return []
@@ -576,6 +604,8 @@ class PCloudBackupAgent(BackupAgent):
 
             _LOGGER.info("Successfully uploaded backup %s", backup_name)
 
+        except PCloudAuthError as err:
+            raise self._auth_failed(err) from err
         except PCloudAPIError as err:
             _LOGGER.error("Failed to upload backup: %s", err, exc_info=True)
             raise PCloudBackupError(f"Failed to upload backup: {err}") from err
@@ -658,6 +688,8 @@ class PCloudBackupAgent(BackupAgent):
         except BackupNotFound:
             # Re-raise BackupNotFound as-is (it's already a BackupAgentError subclass)
             raise
+        except PCloudAuthError as err:
+            raise self._auth_failed(err) from err
         except PCloudAPIError as err:
             _LOGGER.error(
                 "pCloud API error downloading backup %s: %s",
@@ -724,6 +756,8 @@ class PCloudBackupAgent(BackupAgent):
         except BackupNotFound:
             # Re-raise BackupNotFound as-is (it's already a BackupAgentError subclass)
             raise
+        except PCloudAuthError as err:
+            raise self._auth_failed(err) from err
         except PCloudAPIError as err:
             _LOGGER.error("Failed to delete backup: %s", err, exc_info=True)
             raise PCloudBackupError(f"Failed to delete backup: {err}") from err

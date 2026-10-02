@@ -7,15 +7,17 @@ import json
 from unittest.mock import call
 
 from homeassistant.components.backup import AgentBackup, BackupAgentError, BackupNotFound
+from homeassistant.config_entries import SOURCE_REAUTH
 from homeassistant.core import HomeAssistant
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.pcloud_backup.api import PCloudAPIError
+from custom_components.pcloud_backup.api import PCloudAPIError, PCloudAuthError
 from custom_components.pcloud_backup.backup import (
     METADATA_VERSION,
     BackupMetadataCache,
     PCloudBackupAgent,
+    PCloudBackupAuthError,
     PCloudBackupError,
 )
 from custom_components.pcloud_backup.const import (
@@ -504,3 +506,79 @@ def test_api_lookup(hass: HomeAssistant, mock_api) -> None:
     assert agent.api is mock_api
     hass.data[DOMAIN] = {}
     assert agent.api is mock_api
+
+
+# --- authentication errors / reauth -------------------------------------------
+
+
+def _reauth_flows(hass: HomeAssistant) -> list:
+    return [
+        flow
+        for flow in hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+        if flow["context"]["source"] == SOURCE_REAUTH
+    ]
+
+
+async def _call_agent(agent: PCloudBackupAgent, operation: str) -> None:
+    if operation == "list":
+        await agent.async_list_backups()
+    elif operation == "get":
+        await agent.async_get_backup("a1b2c3d4")
+    elif operation == "delete":
+        await agent.async_delete_backup("a1b2c3d4")
+    elif operation == "download":
+        await agent.async_download_backup("a1b2c3d4")
+    else:
+        await agent.async_upload_backup(open_stream=_open_stream, backup=_agent_backup())
+
+
+OPERATIONS = ["list", "get", "delete", "download", "upload"]
+
+
+@pytest.mark.parametrize("operation", OPERATIONS)
+async def test_auth_error_starts_reauth(
+    hass: HomeAssistant, agent: PCloudBackupAgent, mock_api, operation: str
+) -> None:
+    """A rejected token starts reauth and raises a BackupAgentError with a clear message."""
+    mock_api.async_get_folder_id.side_effect = PCloudAuthError(
+        "pCloud authentication failed: Log in required."
+    )
+
+    with pytest.raises(PCloudBackupAuthError, match="Re-authenticate") as exc_info:
+        await _call_agent(agent, operation)
+    await hass.async_block_till_done()
+
+    assert isinstance(exc_info.value, BackupAgentError)
+    (flow,) = _reauth_flows(hass)
+    assert flow["context"]["entry_id"] == ENTRY_ID
+    assert flow["step_id"] == "reauth_confirm"
+
+
+async def test_repeated_auth_errors_start_one_reauth_flow(
+    hass: HomeAssistant, agent: PCloudBackupAgent, mock_api
+) -> None:
+    """Home Assistant de-duplicates reauth flows for the same entry."""
+    mock_api.async_get_folder_id.side_effect = PCloudAuthError("Log in required.")
+
+    for _ in range(2):
+        with pytest.raises(PCloudBackupAuthError):
+            await agent.async_list_backups()
+        await hass.async_block_till_done()
+
+    assert len(_reauth_flows(hass)) == 1
+
+
+@pytest.mark.parametrize("operation", OPERATIONS)
+async def test_non_auth_errors_do_not_start_reauth(
+    hass: HomeAssistant, agent: PCloudBackupAgent, mock_api, operation: str
+) -> None:
+    """Other API errors keep their behaviour and never start reauth."""
+    mock_api.async_get_folder_id.side_effect = PCloudAPIError("down")
+
+    try:
+        await _call_agent(agent, operation)
+    except PCloudBackupError as err:
+        assert not isinstance(err, PCloudBackupAuthError)
+    await hass.async_block_till_done()
+
+    assert _reauth_flows(hass) == []

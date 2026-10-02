@@ -103,6 +103,23 @@ class PCloudAPIError(Exception):
     pass
 
 
+class PCloudAuthError(PCloudAPIError):
+    """pCloud rejected the credentials (e.g. a revoked OAuth access token).
+
+    pCloud OAuth access tokens do not expire and pCloud issues no refresh
+    tokens, so this cannot be fixed by retrying: the user has to
+    re-authenticate the config entry.
+    """
+
+
+# pCloud result codes meaning the request was not authenticated:
+# 1000 "Log in required." and 2000 "Log in failed." are documented for all
+# authenticated methods (https://docs.pcloud.com/methods/general/userinfo.html,
+# https://docs.pcloud.com/methods/folder/listfolder.html). 2094 "Invalid
+# 'access_token' provided." is returned for invalid/revoked OAuth access tokens.
+AUTH_ERROR_CODES = frozenset({1000, 2000, 2094})
+
+
 class PCloudAPI:
     """Async wrapper for pCloud REST API."""
 
@@ -215,28 +232,10 @@ class PCloudAPI:
             error_code = result.get("result")
             error_msg = result.get("error", "Unknown error")
 
-            # If auth error, try to refresh token
-            if error_code in (1000, 1001, 1002):  # Common auth errors
-                _LOGGER.debug("Auth error detected, refreshing token")
-                try:
-                    await self.auth.refresh_token_if_needed()
-                    # Retry request with new token
-                    auth_token = await self.auth.get_auth_token()
-                    if is_oauth2:
-                        headers["Authorization"] = f"Bearer {auth_token}"
-                    else:
-                        request_params["auth"] = auth_token
-                    result = await _send()
-
-                    # Check result again after retry
-                    if isinstance(result, dict) and result.get("result") != 0:
-                        error_msg = result.get("error", "Unknown error")
-                        raise PCloudAPIError(f"pCloud API error: {error_msg}")
-                except Exception as refresh_err:
-                    _LOGGER.warning("Failed to refresh token: %s", refresh_err)
-                    raise PCloudAPIError(f"pCloud API error: {error_msg}") from refresh_err
-            else:
-                raise PCloudAPIError(f"pCloud API error: {error_msg}")
+            if error_code in AUTH_ERROR_CODES:
+                # pCloud has no refresh tokens; the entry needs reauthentication.
+                raise PCloudAuthError(f"pCloud authentication failed: {error_msg}")
+            raise PCloudAPIError(f"pCloud API error: {error_msg}")
 
         return result
 

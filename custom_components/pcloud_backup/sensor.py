@@ -13,12 +13,13 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import StateType
 from homeassistant.helpers.update_coordinator import CoordinatorEntity, DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
-from .api import PCloudAPI, PCloudAPIError
+from .api import PCloudAPI, PCloudAPIError, PCloudAuthError
 from .const import (
     ATTR_ACCOUNT_USED_SPACE,
     ATTR_FREE_SPACE,
@@ -132,9 +133,9 @@ class PCloudBackupCoordinator(DataUpdateCoordinator):
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data from pCloud API."""
-        try:
-            from .backup import PCloudBackupAgent
+        from .backup import PCloudBackupAgent, PCloudBackupAuthError
 
+        try:
             backup_agent = PCloudBackupAgent(self.hass, self.entry.entry_id)
             # Access API property to ensure it's loaded
             _ = backup_agent.api
@@ -176,6 +177,8 @@ class PCloudBackupCoordinator(DataUpdateCoordinator):
                     used_quota,
                     free_space,
                 )
+            except PCloudAuthError:
+                raise
             except Exception as err:
                 _LOGGER.warning("Failed to fetch userinfo: %s", err)
                 free_space = None
@@ -194,6 +197,9 @@ class PCloudBackupCoordinator(DataUpdateCoordinator):
             _LOGGER.debug("Sensor data: %s", result)
             return result
 
+        except (PCloudAuthError, PCloudBackupAuthError) as err:
+            # Revoked/invalid token: the coordinator starts the reauth flow.
+            raise ConfigEntryAuthFailed(str(err)) from err
         except PCloudAPIError as err:
             _LOGGER.error("Error updating pCloud backup data: %s", err)
             self._last_sync_status = "Failed"

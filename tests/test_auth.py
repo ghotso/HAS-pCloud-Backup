@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 import re
+from unittest.mock import patch
 
 from aioresponses import aioresponses
 from homeassistant.core import HomeAssistant
@@ -222,6 +223,19 @@ async def test_oauth_refresh_skipped_without_auth_implementation(hass: HomeAssis
     auth = PCloudOAuth2Auth(hass, "eu", config_entry_id=entry.entry_id)
     await auth.refresh_token_if_needed()
     assert await auth.get_auth_token() == "x"
+
+
+async def test_oauth_refresh_is_noop(hass: HomeAssistant, config_entry: MockConfigEntry) -> None:
+    """pCloud has no refresh tokens: no OAuth implementation is resolved (#37)."""
+    config_entry.add_to_hass(hass)
+    auth = PCloudOAuth2Auth(hass, "eu", config_entry_id=ENTRY_ID)
+    with patch(
+        "homeassistant.helpers.config_entry_oauth2_flow.async_get_config_entry_implementation"
+    ) as get_impl:
+        await auth.refresh_token_if_needed()
+
+    get_impl.assert_not_called()
+    assert config_entry.data["token"]["access_token"] == ACCESS_TOKEN
 
 
 def test_create_auth_returns_oauth() -> None:

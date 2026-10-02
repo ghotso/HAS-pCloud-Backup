@@ -18,6 +18,10 @@
           "backup_folder": "Backup Folder Path",
           "upload_timeout_seconds": "Upload timeout (seconds)"
         }
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate pCloud",
+        "description": "pCloud no longer accepts the stored access token (for example because app access was removed or the password was changed). Sign in to the same pCloud account again so backups keep working."
       }
     },
     "error": {
@@ -27,7 +31,10 @@
       "unknown": "Unexpected error occurred: {error}"
     },
     "abort": {
-      "already_configured": "This pCloud account is already configured."
+      "already_configured": "This pCloud account is already configured.",
+      "reauth_successful": "Re-authentication was successful.",
+      "wrong_account": "You signed in to a different pCloud account. Sign in with the account this integration was set up with.",
+      "cannot_connect": "Failed to connect to pCloud. Please try again later."
     }
   },
   "options": {

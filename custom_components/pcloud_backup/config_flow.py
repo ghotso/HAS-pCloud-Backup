@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import logging
 from typing import Any
 
-from homeassistant.config_entries import ConfigEntry, OptionsFlow
+from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntry, OptionsFlow
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import AbortFlow, FlowResult
 from homeassistant.helpers import config_entry_oauth2_flow
@@ -396,6 +397,18 @@ class PCloudConfigFlow(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domai
             self.flow_impl = PCloudOAuth2Implementation(self.hass)
         return await self.async_step_auth()
 
+    async def async_step_reauth(self, entry_data: Mapping[str, Any]) -> FlowResult:
+        """Start reauthentication after pCloud rejected the stored access token."""
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Ask the user to re-link the pCloud account, then run the OAuth flow."""
+        if user_input is None:
+            return self.async_show_form(step_id="reauth_confirm", data_schema=vol.Schema({}))
+        return await self.async_step_user()
+
     async def async_oauth_create_entry(self, data: dict[str, Any]) -> FlowResult:
         """Create an entry for the flow."""
         # Store OAuth data for use in the folder path step
@@ -405,8 +418,36 @@ class PCloudConfigFlow(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domai
         self._oauth_locationid = oauth_data.get("locationid")
         self._oauth_data_dict = data
 
+        if self.source == SOURCE_REAUTH:
+            return await self._async_finish_reauth(data)
+
         # Go to folder path configuration step
         return await self.async_step_folder_path()
+
+    async def _async_finish_reauth(self, data: dict[str, Any]) -> FlowResult:
+        """Store the new token on the existing entry (same account only) and reload."""
+        reauth_entry = self._get_reauth_entry()
+        auth = create_auth(
+            hass=self.hass,
+            region=self._oauth_region,
+            access_token=data["token"]["access_token"],
+        )
+        api = PCloudAPI(hass=self.hass, region=self._oauth_region, auth=auth)
+        try:
+            user_info = await api.async_test_connection()
+        except PCloudAPIError as err:
+            _LOGGER.error("Connection test failed during reauthentication: %s", err)
+            return self.async_abort(reason="cannot_connect")
+        finally:
+            await api.async_close()
+
+        if reauth_entry.unique_id is not None:
+            # The entry's unique_id is the account email: refuse another account.
+            await self.async_set_unique_id(user_info.get("email", ""), raise_on_progress=False)
+            self._abort_if_unique_id_mismatch(reason="wrong_account")
+
+        # Only the token changes; folder and timeout options stay as they are.
+        return self.async_update_reload_and_abort(reauth_entry, data_updates=data)
 
     async def async_step_folder_path(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Configure the backup folder path."""

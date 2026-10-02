@@ -5,14 +5,14 @@ from __future__ import annotations
 from collections.abc import Generator
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from homeassistant.config_entries import SOURCE_USER
+from homeassistant.config_entries import SOURCE_USER, ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import AbortFlow, FlowResultType, InvalidData
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 import voluptuous as vol
 
-from custom_components.pcloud_backup.api import PCloudAPIError
+from custom_components.pcloud_backup.api import PCloudAPIError, PCloudAuthError
 from custom_components.pcloud_backup.config_flow import (
     PCloudConfigFlow,
     _backup_options_schema,
@@ -28,7 +28,7 @@ from custom_components.pcloud_backup.const import (
     MIN_UPLOAD_TIMEOUT_SECONDS,
 )
 
-from .common import ACCESS_TOKEN, BACKUP_FOLDER, load_json_fixture
+from .common import ACCESS_TOKEN, BACKUP_FOLDER, ENTRY_DATA, ENTRY_OPTIONS, load_json_fixture
 
 USER_INPUT = {
     CONF_BACKUP_FOLDER: "/My Backups",
@@ -231,3 +231,132 @@ async def test_folder_path_already_configured(
         await flow.async_step_folder_path(USER_INPUT)
 
     assert exc_info.value.reason == "already_configured"
+
+
+# --- Reauthentication ---------------------------------------------------------
+
+NEW_TOKEN_DATA = {
+    "auth_implementation": DOMAIN,
+    "token": {"access_token": "new-token", "token_type": "bearer", "expires_in": 315360000},
+}
+
+
+@pytest.fixture
+def fake_oauth() -> Generator[None]:
+    """Skip the browser OAuth round trip: the auth step returns a new token."""
+
+    async def _fake_auth(self: PCloudConfigFlow, user_input=None):
+        self.flow_impl._oauth_data = {
+            "region": "eu",
+            "hostname": "eapi.pcloud.com",
+            "locationid": 2,
+        }
+        return await self.async_oauth_create_entry(NEW_TOKEN_DATA)
+
+    with patch.object(PCloudConfigFlow, "async_step_auth", _fake_auth):
+        yield
+
+
+async def _start_reauth(hass: HomeAssistant, entry: MockConfigEntry) -> dict:
+    entry.async_start_reauth(hass)
+    await hass.async_block_till_done()
+    (flow,) = hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+    return flow
+
+
+async def test_reauth_flow_updates_token_and_reloads(
+    hass: HomeAssistant,
+    config_entry: MockConfigEntry,
+    mock_pcloud: dict[str, AsyncMock],
+    mock_flow_api: MagicMock,
+    fake_oauth: None,
+) -> None:
+    """Re-linking the same account stores the new token, keeps options and reloads."""
+    config_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    assert mock_pcloud["async_test_connection"].await_count == 1
+
+    flow = await _start_reauth(hass, config_entry)
+    assert flow["step_id"] == "reauth_confirm"
+    result = await hass.config_entries.flow.async_configure(flow["flow_id"])
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "reauth_confirm"
+    result = await hass.config_entries.flow.async_configure(flow["flow_id"], user_input={})
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "reauth_successful"
+    assert config_entry.data == {**ENTRY_DATA, **NEW_TOKEN_DATA}
+    assert config_entry.options == ENTRY_OPTIONS
+    assert config_entry.unique_id == "user@example.com"
+    mock_flow_api.async_get_folder_id.assert_not_called()  # no folder_path step
+    mock_flow_api.async_close.assert_awaited_once()
+    # Reloaded: setup ran again with the new token. (The entry's update listener
+    # may reload it once more, so only check that a reload happened.)
+    assert config_entry.state is ConfigEntryState.LOADED
+    assert mock_pcloud["async_test_connection"].await_count >= 2
+
+
+async def test_reauth_after_failed_setup_loads_entry(
+    hass: HomeAssistant,
+    config_entry: MockConfigEntry,
+    mock_pcloud: dict[str, AsyncMock],
+    mock_flow_api: MagicMock,
+    fake_oauth: None,
+) -> None:
+    """End to end: revoked token fails setup, reauth fixes it and the entry loads."""
+    mock_pcloud["async_test_connection"].side_effect = [
+        PCloudAuthError("pCloud authentication failed: Log in required."),
+        load_json_fixture("userinfo_sample.json"),
+    ]
+    config_entry.add_to_hass(hass)
+    assert not await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    assert config_entry.state is ConfigEntryState.SETUP_ERROR
+
+    (flow,) = hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+    result = await hass.config_entries.flow.async_configure(flow["flow_id"], user_input={})
+    await hass.async_block_till_done()
+
+    assert result["reason"] == "reauth_successful"
+    assert config_entry.data["token"]["access_token"] == "new-token"
+    assert config_entry.state is ConfigEntryState.LOADED
+
+
+async def test_reauth_flow_wrong_account(
+    hass: HomeAssistant,
+    config_entry: MockConfigEntry,
+    mock_flow_api: MagicMock,
+    fake_oauth: None,
+) -> None:
+    """Signing in to a different pCloud account aborts and keeps the old token."""
+    mock_flow_api.async_test_connection.return_value = {"result": 0, "email": "other@example.com"}
+    config_entry.add_to_hass(hass)
+
+    flow = await _start_reauth(hass, config_entry)
+    result = await hass.config_entries.flow.async_configure(flow["flow_id"], user_input={})
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "wrong_account"
+    assert config_entry.data == ENTRY_DATA
+
+
+async def test_reauth_flow_cannot_connect(
+    hass: HomeAssistant,
+    config_entry: MockConfigEntry,
+    mock_flow_api: MagicMock,
+    fake_oauth: None,
+) -> None:
+    """If the new token cannot be verified, the flow aborts without changes."""
+    mock_flow_api.async_test_connection.side_effect = PCloudAPIError("timed out")
+    config_entry.add_to_hass(hass)
+
+    flow = await _start_reauth(hass, config_entry)
+    result = await hass.config_entries.flow.async_configure(flow["flow_id"], user_input={})
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "cannot_connect"
+    assert config_entry.data == ENTRY_DATA
+    mock_flow_api.async_close.assert_awaited_once()

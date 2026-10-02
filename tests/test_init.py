@@ -5,14 +5,14 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 from homeassistant.components.backup import DATA_MANAGER
-from homeassistant.config_entries import ConfigEntryState
+from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.pcloud_backup import async_migrate_entry
-from custom_components.pcloud_backup.api import PCloudAPI, PCloudAPIError
+from custom_components.pcloud_backup.api import PCloudAPI, PCloudAPIError, PCloudAuthError
 from custom_components.pcloud_backup.backup import (
     BackupMetadataCache,
     PCloudBackupAgent,
@@ -91,6 +91,34 @@ async def test_setup_entry_connection_failure(
 
     assert config_entry.state is ConfigEntryState.SETUP_ERROR
     assert ENTRY_ID not in hass.data.get(DOMAIN, {})
+
+
+async def test_setup_entry_auth_failure_starts_reauth(
+    hass: HomeAssistant, config_entry: MockConfigEntry, mock_pcloud: dict[str, AsyncMock]
+) -> None:
+    """A rejected token fails setup and starts the reauth flow."""
+    mock_pcloud["async_test_connection"].side_effect = PCloudAuthError(
+        "pCloud authentication failed: Log in required."
+    )
+
+    assert not await _setup(hass, config_entry)
+
+    assert config_entry.state is ConfigEntryState.SETUP_ERROR
+    (flow,) = hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+    assert flow["context"]["source"] == SOURCE_REAUTH
+    assert flow["context"]["entry_id"] == ENTRY_ID
+    assert flow["step_id"] == "reauth_confirm"
+
+
+async def test_setup_entry_connection_failure_does_not_start_reauth(
+    hass: HomeAssistant, config_entry: MockConfigEntry, mock_pcloud: dict[str, AsyncMock]
+) -> None:
+    """Non-auth connection failures never start reauth."""
+    mock_pcloud["async_test_connection"].side_effect = PCloudAPIError("timed out")
+
+    assert not await _setup(hass, config_entry)
+
+    assert hass.config_entries.flow.async_progress_by_handler(DOMAIN) == []
 
 
 async def test_unload_entry(

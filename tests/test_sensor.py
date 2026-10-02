@@ -5,13 +5,14 @@ from __future__ import annotations
 from datetime import timedelta
 from unittest.mock import AsyncMock, patch
 
-from homeassistant.const import STATE_UNKNOWN
+from homeassistant.config_entries import SOURCE_REAUTH
+from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant, State
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import MockConfigEntry, async_fire_time_changed
 
-from custom_components.pcloud_backup.api import PCloudAPIError
+from custom_components.pcloud_backup.api import PCloudAPIError, PCloudAuthError
 from custom_components.pcloud_backup.backup import PCloudBackupAgent
 from custom_components.pcloud_backup.const import DOMAIN
 
@@ -112,3 +113,55 @@ async def test_failed_refresh_keeps_previous_values(
     assert _state(hass, "last_sync_status").attributes["error"] == "unexpected"
     assert _state(hass, "remote_backup_count").state == "2"
     assert _state(hass, "free_space").state == "8.0"
+
+
+def _reauth_flows(hass: HomeAssistant) -> list:
+    return [
+        flow
+        for flow in hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+        if flow["context"]["source"] == SOURCE_REAUTH
+    ]
+
+
+async def test_auth_error_on_userinfo_starts_reauth(
+    hass: HomeAssistant, config_entry: MockConfigEntry, mock_pcloud
+) -> None:
+    """A rejected token during a refresh raises ConfigEntryAuthFailed (reauth)."""
+    await _setup(hass, config_entry)
+    mock_pcloud["async_get_userinfo"].side_effect = PCloudAuthError("Log in required.")
+
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=6))
+    await hass.async_block_till_done()
+
+    (flow,) = _reauth_flows(hass)
+    assert flow["context"]["entry_id"] == ENTRY_ID
+    assert _state(hass, "remote_backup_count").state == STATE_UNAVAILABLE
+
+
+async def test_auth_error_on_listing_starts_reauth(
+    hass: HomeAssistant, config_entry: MockConfigEntry, mock_pcloud
+) -> None:
+    """A rejected token while listing backups also starts reauth."""
+    await _setup(hass, config_entry)
+    mock_pcloud["async_get_folder_id"].side_effect = PCloudAuthError("Log in required.")
+
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=6))
+    await hass.async_block_till_done()
+
+    assert len(_reauth_flows(hass)) == 1
+    assert _state(hass, "remote_backup_count").state == STATE_UNAVAILABLE
+
+
+async def test_api_error_does_not_start_reauth(
+    hass: HomeAssistant, config_entry: MockConfigEntry, mock_pcloud
+) -> None:
+    """Non-auth failures only flag the status sensor."""
+    await _setup(hass, config_entry)
+    mock_pcloud["async_get_userinfo"].side_effect = PCloudAPIError("timed out")
+    mock_pcloud["async_get_folder_id"].side_effect = PCloudAPIError("timed out")
+
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=6))
+    await hass.async_block_till_done()
+
+    assert _reauth_flows(hass) == []
+    assert _state(hass, "remote_backup_count").state != STATE_UNAVAILABLE
