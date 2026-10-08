@@ -84,6 +84,7 @@ async def test_api_error_raises(oauth_api: PCloudAPI) -> None:
         (1000, "Log in required."),
         (2000, "Log in failed."),
         (2094, "Invalid 'access_token' provided."),
+        (2095, "Revoked 'access_token' provided, you need to re-authorize the application."),
     ],
 )
 async def test_auth_error_raises_auth_error_without_refresh(

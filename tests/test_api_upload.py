@@ -57,7 +57,12 @@ def _assert_removed(created_paths: list[str], tmp_path: Path, suffix: str) -> No
 
 @pytest.mark.parametrize(
     ("code", "message"),
-    [(1000, "Log in required."), (2000, "Log in failed."), (2094, "Invalid 'access_token'.")],
+    [
+        (1000, "Log in required."),
+        (2000, "Log in failed."),
+        (2094, "Invalid 'access_token'."),
+        (2095, "Revoked 'access_token' provided, you need to re-authorize the application."),
+    ],
 )
 async def test_upload_from_path_auth_error(
     api: PCloudAPI, tmp_path: Path, code: int, message: str

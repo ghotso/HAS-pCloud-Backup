@@ -122,8 +122,9 @@ class PCloudAuthError(PCloudAPIError):
 # 1000 "Log in required." and 2000 "Log in failed." are documented for all
 # authenticated methods (https://docs.pcloud.com/methods/general/userinfo.html,
 # https://docs.pcloud.com/methods/folder/listfolder.html). 2094 "Invalid
-# 'access_token' provided." is returned for invalid/revoked OAuth access tokens.
-AUTH_ERROR_CODES = frozenset({1000, 2000, 2094})
+# 'access_token' provided." indicates an invalid OAuth token; 2095 indicates a
+# revoked OAuth token that requires reauthorization.
+AUTH_ERROR_CODES = frozenset({1000, 2000, 2094, 2095})
 
 
 def _result_error(result: dict[str, Any]) -> PCloudAPIError:
