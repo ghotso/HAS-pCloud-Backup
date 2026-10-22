@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Callable, Collection, Coroutine
 import json
 import logging
@@ -27,6 +28,7 @@ from .const import (
     DEFAULT_BACKUP_FOLDER,
     DEFAULT_UPLOAD_TIMEOUT_SECONDS,
     DOMAIN,
+    METADATA_DOWNLOAD_CONCURRENCY,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -82,9 +84,19 @@ class BackupMetadataCache:
     with an unchanged (fileid, hash) does not need to be downloaded again.
     """
 
-    def __init__(self) -> None:
-        """Initialize an empty cache."""
+    def __init__(self, on_change: Callable[[], None] | None = None) -> None:
+        """Initialize an empty cache.
+
+        on_change is called after every modification (used to persist the cache).
+        """
         self._entries: dict[Any, tuple[Any, dict[str, Any]]] = {}
+        self._on_change = on_change
+        # Persistent store owning this cache (None = memory only); set by entry setup.
+        self.store: Any = None
+
+    def _changed(self) -> None:
+        if self._on_change is not None:
+            self._on_change()
 
     def __len__(self) -> int:
         """Return the number of cached payloads."""
@@ -100,15 +112,41 @@ class BackupMetadataCache:
     def set(self, file_id: Any, content_hash: Any, payload: dict[str, Any]) -> None:
         """Store a parsed payload."""
         self._entries[file_id] = (content_hash, payload)
+        self._changed()
 
     def prune(self, file_ids: Collection[Any]) -> None:
         """Drop entries whose file id is not in file_ids (keeps the cache bounded)."""
-        for file_id in self._entries.keys() - set(file_ids):
+        stale = self._entries.keys() - set(file_ids)
+        for file_id in stale:
             del self._entries[file_id]
+        if stale:
+            self._changed()
 
     def clear(self) -> None:
         """Drop all entries."""
         self._entries.clear()
+
+    def as_data(self) -> dict[str, Any]:
+        """Return the entries in a JSON-serializable form for persistent storage."""
+        return {
+            "entries": [
+                {"file_id": file_id, "hash": content_hash, "payload": payload}
+                for file_id, (content_hash, payload) in self._entries.items()
+            ]
+        }
+
+    def load(self, data: Any) -> None:
+        """Restore entries from as_data() output; malformed items are skipped."""
+        if not isinstance(data, dict):
+            return
+        for item in data.get("entries") or []:
+            if (
+                isinstance(item, dict)
+                and item.get("file_id") is not None
+                and item.get("hash") is not None
+                and isinstance(item.get("payload"), dict)
+            ):
+                self._entries[item["file_id"]] = (item["hash"], item["payload"])
 
 
 class PCloudBackupError(BackupAgentError):
@@ -326,10 +364,29 @@ class PCloudBackupAgent(BackupAgent):
         backups_by_key: dict[str, AgentBackup] = {}
         backup_id_index: dict[str, str] = {}
 
-        for metadata_key in backup_files:
-            agent_backup = await self._async_get_agent_backup(
-                backup_files, metadata_files, metadata_key
-            )
+        # Metadata downloads are independent: run them in parallel (bounded) instead of one
+        # after another, so a single slow download does not stall the whole listing.
+        semaphore = asyncio.Semaphore(METADATA_DOWNLOAD_CONCURRENCY)
+
+        async def _get(metadata_key: str) -> AgentBackup | None:
+            async with semaphore:
+                return await self._async_get_agent_backup(
+                    backup_files, metadata_files, metadata_key
+                )
+
+        keys = list(backup_files)
+        tasks = [asyncio.ensure_future(_get(key)) for key in keys]
+        try:
+            results = await asyncio.gather(*tasks)
+        except BaseException:
+            # gather does not cancel the other downloads when one fails; do it here so
+            # no request keeps running (and filling the cache) after the listing failed.
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
+
+        for metadata_key, agent_backup in zip(keys, results, strict=True):
             if not agent_backup:
                 continue
             backups_by_key[metadata_key] = agent_backup

@@ -3,19 +3,25 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
+from homeassistant.helpers.storage import Store
 
 from .api import PCloudAPI, PCloudAuthError
 from .auth import create_auth
 from .backup import BackupMetadataCache
 from .const import (
+    CONF_CACHE_METADATA,
     CONF_REGION,
     DATA_BACKUP_AGENT_LISTENERS,
     DATA_METADATA_CACHE,
+    DEFAULT_CACHE_METADATA,
     DOMAIN,
+    METADATA_CACHE_SAVE_DELAY,
+    METADATA_CACHE_STORAGE_VERSION,
     PLATFORMS,
 )
 
@@ -84,7 +90,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry.runtime_data = api
     # Backup agents are re-created whenever HA reloads agents; keep the parsed
     # metadata cache per entry so it survives that and is dropped on unload.
-    hass.data.setdefault(DATA_METADATA_CACHE, {})[entry.entry_id] = BackupMetadataCache()
+    hass.data.setdefault(DATA_METADATA_CACHE, {})[entry.entry_id] = await _async_metadata_cache(
+        hass, entry
+    )
 
     # Notify backup manager listeners on every state change. Notifying only
     # during setup is too early: the entry is still SETUP_IN_PROGRESS, so
@@ -101,6 +109,40 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
+def _metadata_store(hass: HomeAssistant, entry: ConfigEntry) -> Store[dict[str, Any]]:
+    return Store(hass, METADATA_CACHE_STORAGE_VERSION, f"{DOMAIN}.metadata_cache.{entry.entry_id}")
+
+
+async def _async_metadata_cache(hass: HomeAssistant, entry: ConfigEntry) -> BackupMetadataCache:
+    """Create the metadata cache; optionally backed by persistent storage.
+
+    With the option off (default) the cache lives in memory only and every Home Assistant
+    start downloads the metadata files again; a previously stored copy is removed.
+    """
+    store = _metadata_store(hass, entry)
+    if not entry.options.get(CONF_CACHE_METADATA, DEFAULT_CACHE_METADATA):
+        try:
+            await store.async_remove()
+        except OSError as err:
+            # Caching is off anyway; a leftover file must not block setup.
+            _LOGGER.warning("Could not remove stored pCloud metadata cache: %s", err)
+        return BackupMetadataCache()
+
+    cache: BackupMetadataCache
+
+    def _save() -> None:
+        store.async_delay_save(cache.as_data, METADATA_CACHE_SAVE_DELAY)
+
+    cache = BackupMetadataCache(on_change=_save)
+    cache.store = store
+    try:
+        cache.load(await store.async_load())
+    except Exception as err:  # noqa: BLE001 - a broken cache file must not block setup
+        _LOGGER.warning("Ignoring unreadable pCloud metadata cache: %s", err)
+    _LOGGER.debug("Loaded %d cached pCloud metadata entries", len(cache))
+    return cache
+
+
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
@@ -110,6 +152,11 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if api:
             await api.async_close()
         if (cache := hass.data.get(DATA_METADATA_CACHE, {}).pop(entry.entry_id, None)) is not None:
+            if cache.store is not None:
+                # Write the current entries now: this also cancels a pending delayed save,
+                # so no writer from this (unloaded) cache can run later and overwrite or
+                # recreate the file (e.g. after a reload or after disabling the option).
+                await cache.store.async_save(cache.as_data())
             cache.clear()
         entry.runtime_data = None
 
@@ -119,3 +166,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Reload config entry."""
     await hass.config_entries.async_reload(entry.entry_id)
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Remove the persistent metadata cache of a deleted config entry."""
+    await _metadata_store(hass, entry).async_remove()

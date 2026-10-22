@@ -107,7 +107,7 @@ async def test_failed_refresh_keeps_previous_values(
         AsyncMock(side_effect=RuntimeError("unexpected")),
     ):
         async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=6))
-        await hass.async_block_till_done()
+        await hass.async_block_till_done(wait_background_tasks=True)
 
     assert _state(hass, "last_sync_status").state == "Failed"
     assert _state(hass, "last_sync_status").attributes["error"] == "unexpected"
@@ -131,7 +131,7 @@ async def test_auth_error_on_userinfo_starts_reauth(
     mock_pcloud["async_get_userinfo"].side_effect = PCloudAuthError("Log in required.")
 
     async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=6))
-    await hass.async_block_till_done()
+    await hass.async_block_till_done(wait_background_tasks=True)
 
     (flow,) = _reauth_flows(hass)
     assert flow["context"]["entry_id"] == ENTRY_ID
@@ -146,7 +146,7 @@ async def test_auth_error_on_listing_starts_reauth(
     mock_pcloud["async_get_folder_id"].side_effect = PCloudAuthError("Log in required.")
 
     async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=6))
-    await hass.async_block_till_done()
+    await hass.async_block_till_done(wait_background_tasks=True)
 
     assert len(_reauth_flows(hass)) == 1
     assert _state(hass, "remote_backup_count").state == STATE_UNAVAILABLE
@@ -161,7 +161,7 @@ async def test_api_error_does_not_start_reauth(
     mock_pcloud["async_get_folder_id"].side_effect = PCloudAPIError("timed out")
 
     async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=6))
-    await hass.async_block_till_done()
+    await hass.async_block_till_done(wait_background_tasks=True)
 
     assert _reauth_flows(hass) == []
     assert _state(hass, "remote_backup_count").state != STATE_UNAVAILABLE

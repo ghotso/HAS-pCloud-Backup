@@ -38,12 +38,21 @@ CONF_USERNAME = "username"
 CONF_PASSWORD = "password"
 CONF_BACKUP_FOLDER = "backup_folder"
 CONF_UPLOAD_TIMEOUT_SECONDS = "upload_timeout_seconds"
+CONF_CACHE_METADATA = "cache_metadata"
 
 # Maximum time for a single upload HTTP request (large backups over slow links).
 # Default 24 hours; configurable in integration options.
 DEFAULT_UPLOAD_TIMEOUT_SECONDS = 86400
 MIN_UPLOAD_TIMEOUT_SECONDS = 600
 MAX_UPLOAD_TIMEOUT_SECONDS = 172800
+
+# Backup metadata (.metadata.json) is immutable once written. Optionally keep the parsed
+# payloads on disk so a Home Assistant restart does not download every file again.
+DEFAULT_CACHE_METADATA = False
+METADATA_CACHE_STORAGE_VERSION = 1
+METADATA_CACHE_SAVE_DELAY = 10  # seconds; coalesces writes while a listing fills the cache
+# Metadata files are downloaded in parallel, bounded so pCloud is not flooded.
+METADATA_DOWNLOAD_CONCURRENCY = 4
 
 # Sensor attributes
 ATTR_REMOTE_BACKUP_COUNT = "remote_backup_count"

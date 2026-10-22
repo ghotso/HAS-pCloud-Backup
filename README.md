@@ -105,6 +105,8 @@ Once configured, the integration will:
 
 **Upload timeout:** The maximum duration (in **seconds**) for a single backup upload is configurable during setup and at any time under the integration’s **Configure** dialog. Default **86400** (24 hours); allowed **600–172800** (10 minutes–48 hours). Raise it if very large backups fail with upload timeouts on a slow uplink.
 
+**Backup metadata:** For every backup the integration also stores a small `.metadata.json` file in pCloud. Listing backups downloads these files in parallel (up to 4 at a time). By default they are downloaded again after every Home Assistant restart. Enable **Keep backup metadata cached on disk** under **Configure** to keep the parsed metadata in Home Assistant's storage instead: metadata files never change once written, so after a restart only new backups need a download. This shortens startup when many backups are stored or pCloud responds slowly. Turning the option off removes the stored copy.
+
 ## Sensors
 
 The integration provides the following sensors:

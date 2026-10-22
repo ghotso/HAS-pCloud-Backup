@@ -16,9 +16,11 @@ from .api import PCloudAPI, PCloudAPIError
 from .auth import create_auth
 from .const import (
     CONF_BACKUP_FOLDER,
+    CONF_CACHE_METADATA,
     CONF_REGION,
     CONF_UPLOAD_TIMEOUT_SECONDS,
     DEFAULT_BACKUP_FOLDER,
+    DEFAULT_CACHE_METADATA,
     DEFAULT_UPLOAD_TIMEOUT_SECONDS,
     DOMAIN,
     MAX_UPLOAD_TIMEOUT_SECONDS,
@@ -64,18 +66,23 @@ class PCloudOptionsFlowHandler(OptionsFlow):
             return self.async_create_entry(title="", data=user_input)
 
         options = self.config_entry.options
-        return self.async_show_form(
-            step_id="init",
-            data_schema=_backup_options_schema(
-                backup_folder_default=options.get(CONF_BACKUP_FOLDER, DEFAULT_BACKUP_FOLDER),
-                upload_timeout_default=int(
-                    options.get(
-                        CONF_UPLOAD_TIMEOUT_SECONDS,
-                        DEFAULT_UPLOAD_TIMEOUT_SECONDS,
-                    )
-                ),
+        schema = _backup_options_schema(
+            backup_folder_default=options.get(CONF_BACKUP_FOLDER, DEFAULT_BACKUP_FOLDER),
+            upload_timeout_default=int(
+                options.get(
+                    CONF_UPLOAD_TIMEOUT_SECONDS,
+                    DEFAULT_UPLOAD_TIMEOUT_SECONDS,
+                )
             ),
+        ).extend(
+            {
+                vol.Required(
+                    CONF_CACHE_METADATA,
+                    default=bool(options.get(CONF_CACHE_METADATA, DEFAULT_CACHE_METADATA)),
+                ): bool,
+            }
         )
+        return self.async_show_form(step_id="init", data_schema=schema)
 
 
 class PCloudOAuth2Implementation(config_entry_oauth2_flow.LocalOAuth2Implementation):

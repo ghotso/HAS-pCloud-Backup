@@ -44,7 +44,11 @@
         "description": "Configure the backup folder path in pCloud and upload timeout for large backups.",
         "data": {
           "backup_folder": "Backup Folder Path",
-          "upload_timeout_seconds": "Upload timeout (seconds)"
+          "upload_timeout_seconds": "Upload timeout (seconds)",
+          "cache_metadata": "Keep backup metadata cached on disk"
+        },
+        "data_description": {
+          "cache_metadata": "Backup metadata files never change once written. When enabled, the parsed metadata is stored locally so a Home Assistant restart does not download every metadata file from pCloud again. When disabled (default), it is downloaded fresh after every restart."
         }
       }
     }

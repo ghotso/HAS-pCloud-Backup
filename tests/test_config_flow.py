@@ -19,6 +19,7 @@ from custom_components.pcloud_backup.config_flow import (
 )
 from custom_components.pcloud_backup.const import (
     CONF_BACKUP_FOLDER,
+    CONF_CACHE_METADATA,
     CONF_REGION,
     CONF_UPLOAD_TIMEOUT_SECONDS,
     DEFAULT_BACKUP_FOLDER,
@@ -94,6 +95,7 @@ async def test_options_flow_shows_current_values(
     assert result["data_schema"]({}) == {
         CONF_BACKUP_FOLDER: BACKUP_FOLDER,
         CONF_UPLOAD_TIMEOUT_SECONDS: 3600,
+        CONF_CACHE_METADATA: False,
     }
 
 
@@ -109,7 +111,23 @@ async def test_options_flow_persists_options(
     )
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert config_entry.options == USER_INPUT
+    assert config_entry.options == {**USER_INPUT, CONF_CACHE_METADATA: False}
+
+
+async def test_options_flow_stores_cache_metadata(
+    hass: HomeAssistant, config_entry: MockConfigEntry
+) -> None:
+    """The metadata cache option is stored and pre-filled on the next visit."""
+    config_entry.add_to_hass(hass)
+    result = await hass.config_entries.options.async_init(config_entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], user_input={**USER_INPUT, CONF_CACHE_METADATA: True}
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert config_entry.options[CONF_CACHE_METADATA] is True
+
+    result = await hass.config_entries.options.async_init(config_entry.entry_id)
+    assert result["data_schema"]({})[CONF_CACHE_METADATA] is True
 
 
 async def test_options_flow_rejects_too_small_timeout(

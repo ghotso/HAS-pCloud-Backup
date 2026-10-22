@@ -44,7 +44,11 @@
         "description": "Konfiguriere den Backup-Pfad in pCloud und das Upload-Timeout f\u00fcr gro\u00dfe Backups.",
         "data": {
           "backup_folder": "Backup-Pfad",
-          "upload_timeout_seconds": "Upload-Timeout (Sekunden)"
+          "upload_timeout_seconds": "Upload-Timeout (Sekunden)",
+          "cache_metadata": "Backup-Metadaten lokal zwischenspeichern"
+        },
+        "data_description": {
+          "cache_metadata": "Metadaten-Dateien eines Backups \u00e4ndern sich nach dem Schreiben nicht mehr. Ist die Option aktiv, werden sie lokal gespeichert, damit ein Neustart von Home Assistant nicht jede Metadaten-Datei erneut von pCloud l\u00e4dt. Ist sie aus (Standard), werden sie nach jedem Neustart frisch geladen."
         }
       }
     }

@@ -642,3 +642,87 @@ async def test_large_upload_auth_error_starts_reauth(
     (flow,) = _reauth_flows(hass)
     assert flow["context"]["entry_id"] == ENTRY_ID
     assert _dir_entries(tmp_path) == []
+
+
+# --- Parallel metadata downloads --------------------------------------------
+
+
+async def test_metadata_downloads_run_in_parallel_but_bounded(
+    hass: HomeAssistant, agent: PCloudBackupAgent, mock_api, metadata_cache
+) -> None:
+    """Metadata files are fetched concurrently, never more than the configured limit."""
+    import asyncio
+
+    from custom_components.pcloud_backup.const import METADATA_DOWNLOAD_CONCURRENCY
+
+    count = METADATA_DOWNLOAD_CONCURRENCY * 2 + 1
+    files = []
+    for i in range(count):
+        key = f"Backup_{i:02d}"
+        files.append(
+            {
+                "name": f"{key}.tar",
+                "fileid": 1000 + i,
+                "size": 10,
+                "isfolder": False,
+                "modified": f"Thu, 0{1 + i % 9} Jan 2025 00:00:00 +0000",
+            }
+        )
+        files.append(
+            {"name": f"{key}.metadata.json", "fileid": 2000 + i, "hash": i + 1, "isfolder": False}
+        )
+    mock_api.async_list_folder.return_value = files
+
+    running = 0
+    peak = 0
+    gate = asyncio.Event()
+
+    async def _download(file_id: int) -> bytes:
+        nonlocal running, peak
+        running += 1
+        try:
+            peak = max(peak, running)
+            if peak >= METADATA_DOWNLOAD_CONCURRENCY:
+                gate.set()
+            # Fails fast (instead of hanging) if downloads are not concurrent.
+            await asyncio.wait_for(gate.wait(), timeout=2)
+            await asyncio.sleep(0)
+        finally:
+            running -= 1
+        return _metadata_with(name=f"Backup {file_id}")
+
+    mock_api.async_download_file.side_effect = _download
+    backups = await agent.async_list_backups()
+
+    assert len(backups) == count
+    assert peak == METADATA_DOWNLOAD_CONCURRENCY
+    assert mock_api.async_download_file.await_count == count
+
+
+async def test_failed_listing_cancels_remaining_downloads(
+    hass: HomeAssistant, agent: PCloudBackupAgent, mock_api, metadata_cache, monkeypatch
+) -> None:
+    """If one item fails unexpectedly, the other metadata downloads are cancelled."""
+    import asyncio
+
+    files = []
+    for i in range(3):
+        files.append({"name": f"B{i}.tar", "fileid": 3000 + i, "size": 1, "isfolder": False})
+        files.append({"name": f"B{i}.metadata.json", "fileid": 4000 + i, "hash": i + 1})
+    mock_api.async_list_folder.return_value = files
+    cancelled: list[str] = []
+
+    async def _fake(backup_files, metadata_files, key):
+        if key == "B0":
+            await asyncio.sleep(0)
+            raise RuntimeError("boom")
+        try:
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            cancelled.append(key)
+            raise
+        return None
+
+    monkeypatch.setattr(agent, "_async_get_agent_backup", _fake)
+    assert await agent.async_list_backups() == []
+    assert sorted(cancelled) == ["B1", "B2"]
