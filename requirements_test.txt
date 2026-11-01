@@ -4,4 +4,4 @@
 # pytest and pytest-asyncio are not listed here so they always follow the plugin.
 pytest-homeassistant-custom-component==0.13.316
 aioresponses==0.7.9
-ruff==0.16.10
+ruff==0.17.3
